@@ -1,0 +1,7 @@
+{
+  "Spinal Muscular Atrophy": "Include infants",
+  "Duchenne Muscular Dystrophy": "Likely to include infants",
+  "Krabbe Disease": "Include infants",
+  "ALS": "Does not include infants",
+  "Cystic Fibrosis": "Likely to include infants"
+}
