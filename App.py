@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Enhanced Clinical Registry Review Tool")
+st.title("🧾 Enhanced Clinical Registry Review Tool V2")
 
 # Load infant population mapping
 @st.cache_data
