@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Enhanced Clinical Registry Review Tool")
+st.title("🧾 Enhanced Clinical Registry Review Tool (API-Free + Inclusion Logic)")
 
 # Load infant population mapping
 @st.cache_data
@@ -19,23 +19,37 @@ def load_age_mapping():
 
 age_map = load_age_mapping()
 
-# Helper function: assess inclusion criteria
+# Helper function: assess infant inclusion criteria
 def assess_infant_inclusion(text):
     if pd.isna(text):
         return "Uncertain"
     text_lower = text.lower()
-    inclusion_terms = [
+
+    # Include infants if explicit terms are present
+    include_terms = [
         "up to 2 years",
         "from 0-24 months",
-        "0-24 months",
-        "from 0-2 years",
-        "0-2 years",
-        "under 2 years",
-        "less than 2 years"
+        "from 0-2 years"
     ]
-    for term in inclusion_terms:
+    for term in include_terms:
         if term in text_lower:
             return "Include infants"
+
+    # Likely to include infants if inclusion starts from 0 age
+    likely_pattern = re.compile(r"(from|starting at|age)\s*0")
+    if likely_pattern.search(text_lower):
+        return "Likely to include infants"
+
+    # Does not include infants if exclusion stated
+    exclude_terms = [
+        "does not include infants",
+        "excludes infants",
+        "not include infants"
+    ]
+    for term in exclude_terms:
+        if term in text_lower:
+            return "Does not include infants"
+
     return "Uncertain"
 
 # Enhanced email extractor with debug logs
@@ -62,10 +76,10 @@ def extract_email(url):
         print(f"⚠️ Error fetching {url}: {e}")
         return ""
 
-# Function to assess Cell/Gene Therapy Relevance based on keywords
-def assess_cgt_relevance(text):
+# Function to assess Cell/Gene Therapy Relevance based on keywords in text and Google search fallback
+def assess_cgt_relevance(text, condition):
     if pd.isna(text):
-        return "Unsure"
+        text = ""
     text_lower = text.lower()
     cgt_keywords = [
         "cell therapy",
@@ -78,6 +92,20 @@ def assess_cgt_relevance(text):
     for kw in cgt_keywords:
         if kw in text_lower:
             return "Relevant"
+
+    # Google search fallback (API-free via requests + regex)
+    try:
+        search_url = f"https://www.google.com/search?q={condition}+gene+therapy"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(search_url, headers=headers, timeout=10)
+        search_text = r.text.lower()
+        for kw in cgt_keywords:
+            if kw in search_text:
+                print(f"✅ Found C&GT keyword via Google search: {kw}")
+                return "Relevant"
+    except Exception as e:
+        print(f"⚠️ Google search error for {condition}: {e}")
+
     return "Unsure"
 
 uploaded_file = st.file_uploader("📂 Upload your registry Excel file", type=["xlsx"])
@@ -108,25 +136,27 @@ if uploaded_file:
         st.markdown(f"**Study Title:** `{record['Study Title']}`")
         st.markdown(f"[📄 Open Registry Link]({record['Web site']})")
 
-        # Suggested infant inclusion from age criteria detection
+        # Aggregate study text fields for analysis
         study_texts = " ".join([
             str(record.get("Population (use drop down list)", "")),
             str(record.get("Conditions", "")),
             str(record.get("Study Title", "")),
             str(record.get("Brief Summary", ""))
         ])
+
+        # Assess infant inclusion
         suggested_infant = assess_infant_inclusion(study_texts)
-        st.caption(f"🧒 Suggested Infant Inclusion (based on text scan): **{suggested_infant}**")
+        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
 
         # If age_map has condition-based mapping, override Uncertain
         condition_based = age_map.get(condition, None)
         if condition_based and suggested_infant == "Uncertain":
             suggested_infant = condition_based
-            st.caption(f"🧒 Suggested Infant Inclusion (from mapping): **{suggested_infant}**")
+            st.caption(f"🧒 Suggested Infant Inclusion (mapping): **{suggested_infant}**")
 
-        # Assess C&GT relevance based on keyword search
-        suggested_cgt = assess_cgt_relevance(study_texts)
-        st.caption(f"🧬 Suggested Cell/Gene Therapy Relevance (keyword scan): **{suggested_cgt}**")
+        # Assess C&GT relevance from text and Google search
+        suggested_cgt = assess_cgt_relevance(study_texts, condition)
+        st.caption(f"🧬 Suggested Cell/Gene Therapy Relevance: **{suggested_cgt}**")
 
         email = st.text_input("📧 Contact Email (Column E)", extract_email(record["Web site"]))
 
@@ -148,14 +178,9 @@ if uploaded_file:
             "Unsure"
         ], index=0 if pd.isna(record['Relevance to C&GT']) else 0)
 
-        if st.button("🔍 Auto-check C&GT relevance from clinicaltrials.gov"):
-            cg_auto = search_gene_therapy(condition)
-            st.success(f"Gene therapy relevance: **{cg_auto}**")
-            cg_choice = cg_auto
-
         if st.button("💾 Save This Record"):
             df_filtered.at[record_index, "contact information"] = email
-            df_filtered.at[record_index, "Population (use drop down list)"] = pop_choice
+            df_filtered.at[record_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
             df_filtered.at[record_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             df_filtered.at[record_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
             st.success("✅ Record updated.")
