@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Enhanced Clinical Registry Review Tool (API-Free + Inclusion Logic)")
+st.title("🧾 Enhanced Clinical Registry Review Tool (Revised Inclusion Logic)")
 
 # Load infant population mapping
 @st.cache_data
@@ -35,10 +35,17 @@ def assess_infant_inclusion(text):
         if term in text_lower:
             return "Include infants"
 
-    # Likely to include infants if inclusion starts from 0 age
-    likely_pattern = re.compile(r"(from|starting at|age)\s*0")
-    if likely_pattern.search(text_lower):
-        return "Likely to include infants"
+    # Likely to include infants if inclusion criteria mention age 0, 1 year, 2 years, 12 months, 24 months
+    likely_patterns = [
+        r"(from|starting at|age)\s*0",
+        r"(from|starting at|age)\s*1\s*(year|yr)",
+        r"(from|starting at|age)\s*2\s*(years|yrs)",
+        r"(from|starting at|age)\s*12\s*months?",
+        r"(from|starting at|age)\s*24\s*months?"
+    ]
+    for pattern in likely_patterns:
+        if re.search(pattern, text_lower):
+            return "Likely to include infants"
 
     # Does not include infants if exclusion stated
     exclude_terms = [
@@ -149,44 +156,4 @@ if uploaded_file:
         st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
 
         # If age_map has condition-based mapping, override Uncertain
-        condition_based = age_map.get(condition, None)
-        if condition_based and suggested_infant == "Uncertain":
-            suggested_infant = condition_based
-            st.caption(f"🧒 Suggested Infant Inclusion (mapping): **{suggested_infant}**")
-
-        # Assess C&GT relevance from text and Google search
-        suggested_cgt = assess_cgt_relevance(study_texts, condition)
-        st.caption(f"🧬 Suggested Cell/Gene Therapy Relevance: **{suggested_cgt}**")
-
-        email = st.text_input("📧 Contact Email (Column E)", extract_email(record["Web site"]))
-
-        pop_choice = st.radio("🧒 Infant Population (Column G)", [
-            "Include infants",
-            "Likely to include infants",
-            "Unlikely to include infants but possible",
-            "Does not include infants",
-            "Uncertain"
-        ], index=0 if pd.isna(record['Population (use drop down list)']) else 0)
-
-        comments = st.text_area("🗒 Reviewer Comments (Column H)", value=record.get("Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
-
-        cg_choice = st.radio("🧬 Cell/Gene Therapy Relevance (Column I)", [
-            "Relevant",
-            "Likely Relevant",
-            "Unlikely Relevant",
-            "Not Relevant",
-            "Unsure"
-        ], index=0 if pd.isna(record['Relevance to C&GT']) else 0)
-
-        if st.button("💾 Save This Record"):
-            df_filtered.at[record_index, "contact information"] = email
-            df_filtered.at[record_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
-            df_filtered.at[record_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
-            df_filtered.at[record_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
-            st.success("✅ Record updated.")
-
-        if st.button("📤 Export Updated Excel"):
-            df.update(df_filtered)
-            df.to_excel("updated_registry_review.xlsx", index=False)
-            with open("updated_registry_review.xlsx", "rb") as f:
-                st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
+        condition_based =_
