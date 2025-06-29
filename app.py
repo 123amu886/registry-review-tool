@@ -8,7 +8,7 @@ import re
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
 st.title("🧾 Enhanced Clinical Registry Review Tool (Final Cleaned Version)")
 
-# Load infant population mapping
+# Load infant population mapping (condition-based onset age)
 @st.cache_data
 def load_age_mapping():
     try:
@@ -20,42 +20,62 @@ def load_age_mapping():
 age_map = load_age_mapping()
 
 # Helper function: assess infant inclusion criteria
-def assess_infant_inclusion(text):
+def assess_infant_inclusion(text, condition):
     if pd.isna(text):
-        return "Uncertain"
-    text_lower = text.lower()
+        text_lower = ""
+    else:
+        text_lower = text.lower()
 
-    # Include infants if explicit terms are present
-    include_terms = [
-        "up to 2 years",
-        "from 0-24 months",
-        "from 0-2 years"
+    # Patterns indicating inclusion of infants
+    include_patterns = [
+        r"(from|starting at|age)\s*0",
+        r"(from|starting at)\s*birth",
+        r"newborn",
+        r"infants?",
+        r"less than 2 years",
+        r"up to 2 years",
+        r"0[-\s]*2 years",
+        r"0[-\s]*24 months",
+        r"from 1 year",
+        r"from 12 months"
     ]
-    for term in include_terms:
-        if term in text_lower:
+    for pattern in include_patterns:
+        if re.search(pattern, text_lower):
             return "Include infants"
 
-    # Likely to include infants if inclusion criteria mention age 0, 1 year, 2 years, 12 months, 24 months
+    # Likely to include infants if inclusion criteria mention age 2 years / 24 months
     likely_patterns = [
-        r"(from|starting at|age)\s*0",
-        r"(from|starting at|age)\s*1\s*(year|yr)",
         r"(from|starting at|age)\s*2\s*(years|yrs)",
-        r"(from|starting at|age)\s*12\s*months?",
         r"(from|starting at|age)\s*24\s*months?"
     ]
     for pattern in likely_patterns:
         if re.search(pattern, text_lower):
             return "Likely to include infants"
 
-    # Does not include infants if exclusion stated
+    # Explicit exclusion of infants
     exclude_terms = [
         "does not include infants",
         "excludes infants",
-        "not include infants"
+        "not include infants",
+        "adults only",
+        "children older than 2 years",
+        "age 3 years and above"
     ]
     for term in exclude_terms:
         if term in text_lower:
             return "Does not include infants"
+
+    # Condition-based onset age override
+    onset = age_map.get(condition, "").lower()
+    if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-24 months"]):
+        return "Include infants"
+    elif any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
+        return "Likely to include infants"
+
+    # If only upper bound mentioned without lower bound
+    upper_only_pattern = re.compile(r"up to\s*\d+\s*(years|yrs)")
+    if upper_only_pattern.search(text_lower):
+        return "Uncertain"
 
     return "Uncertain"
 
@@ -151,15 +171,9 @@ if uploaded_file:
             str(record.get("Brief Summary", ""))
         ])
 
-        # Assess infant inclusion
-        suggested_infant = assess_infant_inclusion(study_texts)
+        # Assess infant inclusion with condition-based override
+        suggested_infant = assess_infant_inclusion(study_texts, condition)
         st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
-
-        # If age_map has condition-based mapping, override Uncertain
-        condition_based = age_map.get(condition, None)
-        if condition_based and suggested_infant == "Uncertain":
-            suggested_infant = condition_based
-            st.caption(f"🧒 Suggested Infant Inclusion (mapping): **{suggested_infant}**")
 
         # Assess C&GT relevance from text and Google search
         suggested_cgt = assess_cgt_relevance(study_texts, condition)
