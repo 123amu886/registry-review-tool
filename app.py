@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Enhanced Clinical Registry Review Tool V2")
+st.title("🧾 Enhanced Clinical Registry Review Tool")
 
 # Load infant population mapping
 @st.cache_data
@@ -19,14 +19,28 @@ def load_age_mapping():
 
 age_map = load_age_mapping()
 
-# Email extractor
+# Enhanced email extractor with debug logs
 def extract_email(url):
     try:
         r = requests.get(url, timeout=8)
         soup = BeautifulSoup(r.text, 'html.parser')
         mail = soup.select_one("a[href^=mailto]")
-        return mail['href'].replace('mailto:', '') if mail else ""
-    except:
+        if mail:
+            email = mail['href'].replace('mailto:', '')
+            print(f"✅ Found email: {email} for URL: {url}")
+            return email
+        else:
+            # Try alternative parsing if no mailto link is found
+            potential_emails = soup.get_text()
+            matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", potential_emails)
+            if matches:
+                email_found = matches[0]
+                print(f"✅ Found email via regex: {email_found} for URL: {url}")
+                return email_found
+            print(f"❌ No email found for URL: {url}")
+            return ""
+    except Exception as e:
+        print(f"⚠️ Error fetching {url}: {e}")
         return ""
 
 # ClinicalTrials.gov gene therapy relevance checker
@@ -49,32 +63,33 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file, engine="openpyxl")
 
     reviewer_name = st.text_input("Enter your name (Column F)", "Reseum")
-    df_filtered = df[df["F"] == reviewer_name].copy()
+    df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
 
     condition_query = st.text_input("Optional: Filter by condition name (Column D)").strip()
     if condition_query:
-        df_filtered = df_filtered[df_filtered["D"].str.contains(condition_query, case=False, na=False)]
+        df_filtered = df_filtered[df_filtered["Conditions"].str.contains(condition_query, case=False, na=False)]
 
-    show_incomplete = st.checkbox("Show only incomplete (missing G or I)", value=True)
+    show_incomplete = st.checkbox("Show only incomplete (missing Population or Relevance)", value=True)
     if show_incomplete:
-        df_filtered = df_filtered[df_filtered["G"].isna() | df_filtered["I"].isna()]
+        df_filtered = df_filtered[df_filtered["Population (use drop down list)"].isna() | df_filtered["Relevance to C&GT"].isna()]
 
     if df_filtered.empty:
         st.success("🎉 All caught up! No matching rows found.")
     else:
         record_index = st.number_input("Select record", 0, len(df_filtered) - 1, step=1)
         record = df_filtered.iloc[record_index]
-        condition = record["D"]
+        condition = record["Conditions"]
 
         st.subheader("🔎 Record Details")
         st.markdown(f"**Condition:** `{condition}`")
-        st.markdown(f"[📄 Open Registry Link]({record['C']})")
+        st.markdown(f"**Study Title:** `{record['Study Title']}`")
+        st.markdown(f"[📄 Open Registry Link]({record['Web site']})")
 
         # Suggested infant inclusion
         suggested_infant = age_map.get(condition, "Uncertain")
         st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
 
-        email = st.text_input("📧 Contact Email (Column E)", extract_email(record["C"]))
+        email = st.text_input("📧 Contact Email (Column E)", extract_email(record["Web site"]))
 
         pop_choice = st.radio("🧒 Infant Population (Column G)", [
             "Include infants",
@@ -82,9 +97,9 @@ if uploaded_file:
             "Unlikely to include infants but possible",
             "Does not include infants",
             "Uncertain"
-        ], index=0 if pd.isna(record['G']) else 0)
+        ], index=0 if pd.isna(record['Population (use drop down list)']) else 0)
 
-        comments = st.text_area("🗒 Reviewer Comments (Column H)", value=record.get("H", ""))
+        comments = st.text_area("🗒 Reviewer Comments (Column H)", value=record.get("Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
 
         cg_choice = st.radio("🧬 Cell/Gene Therapy Relevance (Column I)", [
             "Relevant",
@@ -92,7 +107,7 @@ if uploaded_file:
             "Unlikely Relevant",
             "Not Relevant",
             "Unsure"
-        ], index=0 if pd.isna(record['I']) else 0)
+        ], index=0 if pd.isna(record['Relevance to C&GT']) else 0)
 
         if st.button("🔍 Auto-check C&GT relevance from clinicaltrials.gov"):
             cg_auto = search_gene_therapy(condition)
@@ -100,10 +115,10 @@ if uploaded_file:
             cg_choice = cg_auto
 
         if st.button("💾 Save This Record"):
-            df_filtered.at[record_index, "E"] = email
-            df_filtered.at[record_index, "G"] = pop_choice
-            df_filtered.at[record_index, "H"] = comments
-            df_filtered.at[record_index, "I"] = cg_choice
+            df_filtered.at[record_index, "contact information"] = email
+            df_filtered.at[record_index, "Population (use drop down list)"] = pop_choice
+            df_filtered.at[record_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
+            df_filtered.at[record_index, "Relevance to C&GT"] = cg_choice
             st.success("✅ Record updated.")
 
         if st.button("📤 Export Updated Excel"):
