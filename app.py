@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Cleaned Version with Study Links)")
+st.title("🧾 Clinical Registry Review Tool (Final with Accurate C&GT Relevance)")
 
 # Load infant population mapping (condition-based onset age)
 @st.cache_data
@@ -17,7 +17,17 @@ def load_age_mapping():
     except:
         return {}
 
+# Load condition-based C/GT mapping
+@st.cache_data
+def load_cgt_mapping():
+    try:
+        with open("cgt_mapping.json", "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
 age_map = load_age_mapping()
+cgt_map = load_cgt_mapping()
 
 # Helper function: assess infant inclusion criteria
 def assess_infant_inclusion(text, condition):
@@ -74,35 +84,32 @@ def assess_infant_inclusion(text, condition):
 
     return "Uncertain"
 
-# Enhanced email extractor with debug logs
+# Enhanced email extractor
 def extract_email(url):
     try:
         r = requests.get(url, timeout=8)
         soup = BeautifulSoup(r.text, 'html.parser')
         mail = soup.select_one("a[href^=mailto]")
         if mail:
-            email = mail['href'].replace('mailto:', '')
-            print(f"✅ Found email: {email} for URL: {url}")
-            return email
+            return mail['href'].replace('mailto:', '')
         else:
             potential_emails = soup.get_text()
             matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", potential_emails)
             if matches:
-                email_found = matches[0]
-                print(f"✅ Found email via regex: {email_found} for URL: {url}")
-                return email_found
-            print(f"❌ No email found for URL: {url}")
+                return matches[0]
             return ""
     except Exception as e:
         print(f"⚠️ Error fetching {url}: {e}")
         return ""
 
-# Function to assess Cell/Gene Therapy Relevance and retrieve related study links
+# Assess C&GT relevance and retrieve links
 def assess_cgt_relevance_and_links(text, condition):
     links = []
     if pd.isna(text):
         text = ""
     text_lower = text.lower()
+    condition_lower = condition.lower()
+
     cgt_keywords = [
         "cell therapy",
         "gene therapy",
@@ -118,31 +125,29 @@ def assess_cgt_relevance_and_links(text, condition):
         "car-t therapy"
     ]
 
-    # Check registry text fields for keywords
-    for kw in cgt_keywords:
-        if kw in text_lower:
+    # Check condition-based mapping first
+    for known_condition, therapy_type in cgt_map.items():
+        if known_condition in condition_lower:
             relevance = "Relevant"
             break
     else:
-        relevance = "Unsure"
+        # Check registry text fields for keywords
+        for kw in cgt_keywords:
+            if kw in text_lower:
+                relevance = "Relevant"
+                break
+        else:
+            relevance = "Unsure"
 
     # If relevant, add ClinicalTrials.gov and Google Scholar links
     if relevance == "Relevant":
-        try:
-            ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
-            links.append(ct_url)
-        except Exception as e:
-            print(f"⚠️ ClinicalTrials.gov search error for {condition}: {e}")
-
-        try:
-            scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
-            links.append(scholar_url)
-        except Exception as e:
-            print(f"⚠️ Google Scholar search error for {condition}: {e}")
+        ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
+        scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
+        links.extend([ct_url, scholar_url])
 
     return relevance, links
 
-# Load uploaded file and persist using session_state
+# Load uploaded file and persist with session_state
 uploaded_file = st.file_uploader("📂 Upload your registry Excel file", type=["xlsx"])
 
 if uploaded_file:
@@ -220,7 +225,7 @@ if uploaded_file:
             df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
 
-            st.session_state.df = df  # persist updated df
+            st.session_state.df = df
             st.success("✅ Record updated and saved.")
 
         if st.button("📤 Export Updated Excel"):
