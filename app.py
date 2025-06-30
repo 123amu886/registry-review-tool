@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final with Expanded C&GT Keywords)")
+st.title("🧾 Clinical Registry Review Tool (Final Cleaned Version)")
 
 # Load infant population mapping (condition-based onset age)
 @st.cache_data
@@ -205,14 +205,18 @@ if uploaded_file:
         ], index=0 if pd.isna(record['Relevance to C&GT']) else 0)
 
         if st.button("💾 Save This Record"):
+            # Update df_filtered record
             df_filtered.at[record_index, "contact information"] = email
             df_filtered.at[record_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
             df_filtered.at[record_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             df_filtered.at[record_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
             st.success("✅ Record updated.")
 
+            # Replace the updated row back into original df by matching index
+            original_index = df_filtered.index[record_index]
+            df.loc[original_index] = df_filtered.loc[original_index]
+
         if st.button("📤 Export Updated Excel"):
-            df.update(df_filtered)
             df.to_excel("updated_registry_review.xlsx", index=False)
             with open("updated_registry_review.xlsx", "rb") as f:
                 st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
