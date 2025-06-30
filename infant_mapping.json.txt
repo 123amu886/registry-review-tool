@@ -1,7 +1,7 @@
 {
-  "Spinal Muscular Atrophy": "Include infants",
-  "Duchenne Muscular Dystrophy": "Likely to include infants",
-  "Krabbe Disease": "Include infants",
-  "ALS": "Does not include infants",
-  "Cystic Fibrosis": "Likely to include infants"
+  "spinal muscular atrophy": "gene therapy",
+  "duchenne muscular dystrophy": "gene therapy",
+  "hemophilia": "gene therapy",
+  "sickle cell disease": "gene editing",
+  "beta thalassemia": "gene therapy"
 }
