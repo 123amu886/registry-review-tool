@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final with Links & Persistent Saving)")
+st.title("🧾 Clinical Registry Review Tool (Final Cleaned Version with Study Links)")
 
 # Load infant population mapping (condition-based onset age)
 @st.cache_data
@@ -117,33 +117,30 @@ def assess_cgt_relevance_and_links(text, condition):
         "c&gt",
         "car-t therapy"
     ]
+
+    # Check registry text fields for keywords
     for kw in cgt_keywords:
         if kw in text_lower:
-            return "Relevant", links
+            relevance = "Relevant"
+            break
+    else:
+        relevance = "Unsure"
 
-    try:
-        search_url = f"https://www.google.com/search?q={condition}+gene+therapy+study"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if "url?q=" in href:
-                link = href.split("url?q=")[1].split("&")[0]
-                if link.startswith("http"):
-                    links.append(link)
-            if len(links) >= 3:
-                break
+    # If relevant, add ClinicalTrials.gov and Google Scholar links
+    if relevance == "Relevant":
+        try:
+            ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
+            links.append(ct_url)
+        except Exception as e:
+            print(f"⚠️ ClinicalTrials.gov search error for {condition}: {e}")
 
-        for kw in cgt_keywords:
-            if kw in r.text.lower():
-                print(f"✅ Found C&GT keyword via Google search: {kw}")
-                return "Relevant", links
+        try:
+            scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
+            links.append(scholar_url)
+        except Exception as e:
+            print(f"⚠️ Google Scholar search error for {condition}: {e}")
 
-    except Exception as e:
-        print(f"⚠️ Google search error for {condition}: {e}")
-
-    return "Unsure", links
+    return relevance, links
 
 # Load uploaded file and persist using session_state
 uploaded_file = st.file_uploader("📂 Upload your registry Excel file", type=["xlsx"])
