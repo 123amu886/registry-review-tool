@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Enhanced Clinical Registry Review Tool (Final Cleaned Version)")
+st.title("🧾 Clinical Registry Review Tool (Final with Expanded C&GT Keywords)")
 
 # Load infant population mapping (condition-based onset age)
 @st.cache_data
@@ -90,7 +90,6 @@ def extract_email(url):
             print(f"✅ Found email: {email} for URL: {url}")
             return email
         else:
-            # Try alternative parsing if no mailto link is found
             potential_emails = soup.get_text()
             matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", potential_emails)
             if matches:
@@ -112,9 +111,15 @@ def assess_cgt_relevance(text, condition):
         "cell therapy",
         "gene therapy",
         "crispr-cas9 system",
+        "talen",
+        "zfn",
         "gene editing",
+        "gene correction",
+        "gene silencing",
+        "reprogramming",
         "cgt",
-        "c&gt"
+        "c&gt",
+        "car-t therapy"
     ]
     for kw in cgt_keywords:
         if kw in text_lower:
