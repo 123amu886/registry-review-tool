@@ -6,7 +6,7 @@ import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Cleaned Version)")
+st.title("🧾 Clinical Registry Review Tool (Final with Links & Persistent Saving)")
 
 # Load infant population mapping (condition-based onset age)
 @st.cache_data
@@ -26,7 +26,6 @@ def assess_infant_inclusion(text, condition):
     else:
         text_lower = text.lower()
 
-    # Patterns indicating inclusion of infants
     include_patterns = [
         r"(from|starting at|age)\s*0",
         r"(from|starting at)\s*birth",
@@ -43,7 +42,6 @@ def assess_infant_inclusion(text, condition):
         if re.search(pattern, text_lower):
             return "Include infants"
 
-    # Likely to include infants if inclusion criteria mention age 2 years / 24 months
     likely_patterns = [
         r"(from|starting at|age)\s*2\s*(years|yrs)",
         r"(from|starting at|age)\s*24\s*months?"
@@ -52,7 +50,6 @@ def assess_infant_inclusion(text, condition):
         if re.search(pattern, text_lower):
             return "Likely to include infants"
 
-    # Explicit exclusion of infants
     exclude_terms = [
         "does not include infants",
         "excludes infants",
@@ -65,14 +62,12 @@ def assess_infant_inclusion(text, condition):
         if term in text_lower:
             return "Does not include infants"
 
-    # Condition-based onset age override
     onset = age_map.get(condition, "").lower()
     if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-24 months"]):
         return "Include infants"
     elif any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
         return "Likely to include infants"
 
-    # If only upper bound mentioned without lower bound
     upper_only_pattern = re.compile(r"up to\s*\d+\s*(years|yrs)")
     if upper_only_pattern.search(text_lower):
         return "Uncertain"
@@ -102,8 +97,9 @@ def extract_email(url):
         print(f"⚠️ Error fetching {url}: {e}")
         return ""
 
-# Function to assess Cell/Gene Therapy Relevance based on keywords in text and Google search fallback
-def assess_cgt_relevance(text, condition):
+# Function to assess Cell/Gene Therapy Relevance and retrieve related study links
+def assess_cgt_relevance_and_links(text, condition):
+    links = []
     if pd.isna(text):
         text = ""
     text_lower = text.lower()
@@ -123,27 +119,41 @@ def assess_cgt_relevance(text, condition):
     ]
     for kw in cgt_keywords:
         if kw in text_lower:
-            return "Relevant"
+            return "Relevant", links
 
-    # Google search fallback (API-free via requests + regex)
     try:
-        search_url = f"https://www.google.com/search?q={condition}+gene+therapy"
+        search_url = f"https://www.google.com/search?q={condition}+gene+therapy+study"
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(search_url, headers=headers, timeout=10)
-        search_text = r.text.lower()
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if "url?q=" in href:
+                link = href.split("url?q=")[1].split("&")[0]
+                if link.startswith("http"):
+                    links.append(link)
+            if len(links) >= 3:
+                break
+
         for kw in cgt_keywords:
-            if kw in search_text:
+            if kw in r.text.lower():
                 print(f"✅ Found C&GT keyword via Google search: {kw}")
-                return "Relevant"
+                return "Relevant", links
+
     except Exception as e:
         print(f"⚠️ Google search error for {condition}: {e}")
 
-    return "Unsure"
+    return "Unsure", links
 
+# Load uploaded file and persist using session_state
 uploaded_file = st.file_uploader("📂 Upload your registry Excel file", type=["xlsx"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file, engine="openpyxl")
+    if "df" not in st.session_state:
+        df = pd.read_excel(uploaded_file, engine="openpyxl")
+        st.session_state.df = df.copy()
+    else:
+        df = st.session_state.df
 
     reviewer_name = st.text_input("Enter your name (Column F)", "Reseum")
     df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
@@ -168,7 +178,6 @@ if uploaded_file:
         st.markdown(f"**Study Title:** `{record['Study Title']}`")
         st.markdown(f"[📄 Open Registry Link]({record['Web site']})")
 
-        # Aggregate study text fields for analysis
         study_texts = " ".join([
             str(record.get("Population (use drop down list)", "")),
             str(record.get("Conditions", "")),
@@ -176,13 +185,16 @@ if uploaded_file:
             str(record.get("Brief Summary", ""))
         ])
 
-        # Assess infant inclusion with condition-based override
         suggested_infant = assess_infant_inclusion(study_texts, condition)
         st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
 
-        # Assess C&GT relevance from text and Google search
-        suggested_cgt = assess_cgt_relevance(study_texts, condition)
+        suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
         st.caption(f"🧬 Suggested Cell/Gene Therapy Relevance: **{suggested_cgt}**")
+
+        if study_links:
+            st.markdown("🔗 **Related Preclinical/Clinical Study Links:**")
+            for link in study_links:
+                st.markdown(f"- [{link}]({link})")
 
         email = st.text_input("📧 Contact Email (Column E)", extract_email(record["Web site"]))
 
@@ -205,18 +217,16 @@ if uploaded_file:
         ], index=0 if pd.isna(record['Relevance to C&GT']) else 0)
 
         if st.button("💾 Save This Record"):
-            # Update df_filtered record
-            df_filtered.at[record_index, "contact information"] = email
-            df_filtered.at[record_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
-            df_filtered.at[record_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
-            df_filtered.at[record_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
-            st.success("✅ Record updated.")
-
-            # Replace the updated row back into original df by matching index
             original_index = df_filtered.index[record_index]
-            df.loc[original_index] = df_filtered.loc[original_index]
+            df.at[original_index, "contact information"] = email
+            df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
+            df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
+            df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
+
+            st.session_state.df = df  # persist updated df
+            st.success("✅ Record updated and saved.")
 
         if st.button("📤 Export Updated Excel"):
-            df.to_excel("updated_registry_review.xlsx", index=False)
+            st.session_state.df.to_excel("updated_registry_review.xlsx", index=False)
             with open("updated_registry_review.xlsx", "rb") as f:
                 st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
