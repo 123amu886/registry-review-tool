@@ -2,107 +2,39 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import json
 import re
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final with Accurate C&GT Relevance)")
+st.title("🧾 Clinical Registry Review Tool (Final Integrated Version)")
 
-# Load infant population mapping (condition-based onset age)
-@st.cache_data
-def load_age_mapping():
-    try:
-        with open("infant_mapping.json", "r") as f:
-            return json.load(f)
-    except:
-        return {}
+# ✅ Embedded CGT mapping from your approved products, pipeline, and preclinical lists
+cgt_map = {
+    # Approved therapies (Relevant)
+    "rpe65 mutation retinal dystrophy": "Relevant",
+    "spinal muscular atrophy": "Relevant",
+    "hemophilia a": "Relevant",
+    "duchenne muscular dystrophy": "Relevant",
+    "cerebral adrenoleukodystrophy": "Relevant",
+    "beta-thalassemia": "Relevant",
+    "multiple myeloma": "Relevant",
+    "b-all": "Relevant",
+    "dlbcl": "Relevant",
+    "mantle cell lymphoma": "Relevant",
+    "large b-cell lymphoma": "Relevant",
+    "prostate cancer": "Relevant",
+    "perianal fistula crohn's disease": "Relevant",
+    # Phase I-III pipeline (Likely Relevant)
+    "hemophilia b": "Likely Relevant",
+    "sickle cell disease": "Likely Relevant",
+    "metastatic prostate cancer": "Likely Relevant",
+    "b-cell malignancies": "Likely Relevant",
+    "various solid tumors": "Likely Relevant",
+    # Preclinical (Likely Relevant)
+    "type 1 diabetes": "Likely Relevant",
+    "hereditary angioedema": "Likely Relevant",
+}
 
-# Load condition-based C/GT mapping
-@st.cache_data
-def load_cgt_mapping():
-    try:
-        with open("cgt_mapping.json", "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-age_map = load_age_mapping()
-cgt_map = load_cgt_mapping()
-
-# Helper function: assess infant inclusion criteria
-def assess_infant_inclusion(text, condition):
-    if pd.isna(text):
-        text_lower = ""
-    else:
-        text_lower = text.lower()
-
-    include_patterns = [
-        r"(from|starting at|age)\s*0",
-        r"(from|starting at)\s*birth",
-        r"newborn",
-        r"infants?",
-        r"less than 2 years",
-        r"up to 2 years",
-        r"0[-\s]*2 years",
-        r"0[-\s]*24 months",
-        r"from 1 year",
-        r"from 12 months"
-    ]
-    for pattern in include_patterns:
-        if re.search(pattern, text_lower):
-            return "Include infants"
-
-    likely_patterns = [
-        r"(from|starting at|age)\s*2\s*(years|yrs)",
-        r"(from|starting at|age)\s*24\s*months?"
-    ]
-    for pattern in likely_patterns:
-        if re.search(pattern, text_lower):
-            return "Likely to include infants"
-
-    exclude_terms = [
-        "does not include infants",
-        "excludes infants",
-        "not include infants",
-        "adults only",
-        "children older than 2 years",
-        "age 3 years and above"
-    ]
-    for term in exclude_terms:
-        if term in text_lower:
-            return "Does not include infants"
-
-    onset = age_map.get(condition, "").lower()
-    if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-24 months"]):
-        return "Include infants"
-    elif any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
-        return "Likely to include infants"
-
-    upper_only_pattern = re.compile(r"up to\s*\d+\s*(years|yrs)")
-    if upper_only_pattern.search(text_lower):
-        return "Uncertain"
-
-    return "Uncertain"
-
-# Enhanced email extractor
-def extract_email(url):
-    try:
-        r = requests.get(url, timeout=8)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        mail = soup.select_one("a[href^=mailto]")
-        if mail:
-            return mail['href'].replace('mailto:', '')
-        else:
-            potential_emails = soup.get_text()
-            matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", potential_emails)
-            if matches:
-                return matches[0]
-            return ""
-    except Exception as e:
-        print(f"⚠️ Error fetching {url}: {e}")
-        return ""
-
-# Assess C&GT relevance and retrieve links
+# Helper function: assess CGT relevance and provide study links
 def assess_cgt_relevance_and_links(text, condition):
     links = []
     if pd.isna(text):
@@ -110,40 +42,29 @@ def assess_cgt_relevance_and_links(text, condition):
     text_lower = text.lower()
     condition_lower = condition.lower()
 
+    # Primary: check mapping
+    relevance = cgt_map.get(condition_lower, None)
+    if relevance:
+        if relevance in ["Relevant", "Likely Relevant"]:
+            # ClinicalTrials.gov and Scholar links
+            ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
+            scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
+            links.extend([ct_url, scholar_url])
+        return relevance, links
+
+    # Secondary: fallback to keyword detection
     cgt_keywords = [
-        "cell therapy",
-        "gene therapy",
-        "crispr-cas9 system",
-        "talen",
-        "zfn",
-        "gene editing",
-        "gene correction",
-        "gene silencing",
-        "reprogramming",
-        "cgt",
-        "c&gt",
-        "car-t therapy"
+        "cell therapy", "gene therapy", "crispr-cas9 system", "talen", "zfn",
+        "gene editing", "gene correction", "gene silencing", "reprogramming",
+        "cgt", "c&gt", "car-t therapy"
     ]
-
-    # Check condition-based mapping first
-    for known_condition, therapy_type in cgt_map.items():
-        if known_condition in condition_lower:
-            relevance = "Relevant"
-            break
-    else:
-        # Check registry text fields for keywords
-        for kw in cgt_keywords:
-            if kw in text_lower:
-                relevance = "Relevant"
-                break
-        else:
-            relevance = "Unsure"
-
-    # If relevant, add ClinicalTrials.gov and Google Scholar links
-    if relevance == "Relevant":
+    if any(kw in text_lower for kw in cgt_keywords):
+        relevance = "Likely Relevant"
         ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
         scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
         links.extend([ct_url, scholar_url])
+    else:
+        relevance = "Unlikely Relevant"
 
     return relevance, links
 
@@ -159,10 +80,6 @@ if uploaded_file:
 
     reviewer_name = st.text_input("Enter your name (Column F)", "Reseum")
     df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
-
-    condition_query = st.text_input("Optional: Filter by condition name (Column D)").strip()
-    if condition_query:
-        df_filtered = df_filtered[df_filtered["Conditions"].str.contains(condition_query, case=False, na=False)]
 
     show_incomplete = st.checkbox("Show only incomplete (missing Population or Relevance)", value=True)
     if show_incomplete:
@@ -187,9 +104,7 @@ if uploaded_file:
             str(record.get("Brief Summary", ""))
         ])
 
-        suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
-
+        # Assess CGT relevance and provide links
         suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
         st.caption(f"🧬 Suggested Cell/Gene Therapy Relevance: **{suggested_cgt}**")
 
@@ -198,8 +113,26 @@ if uploaded_file:
             for link in study_links:
                 st.markdown(f"- [{link}]({link})")
 
+        # Contact email extraction
+        def extract_email(url):
+            try:
+                r = requests.get(url, timeout=8)
+                soup = BeautifulSoup(r.text, 'html.parser')
+                mail = soup.select_one("a[href^=mailto]")
+                if mail:
+                    return mail['href'].replace('mailto:', '')
+                else:
+                    matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
+                    if matches:
+                        return matches[0]
+                return ""
+            except Exception as e:
+                print(f"⚠️ Error fetching {url}: {e}")
+                return ""
+
         email = st.text_input("📧 Contact Email (Column E)", extract_email(record["Web site"]))
 
+        # Reviewer inputs
         pop_choice = st.radio("🧒 Infant Population (Column G)", [
             "Include infants",
             "Likely to include infants",
@@ -221,7 +154,7 @@ if uploaded_file:
         if st.button("💾 Save This Record"):
             original_index = df_filtered.index[record_index]
             df.at[original_index, "contact information"] = email
-            df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
+            df.at[original_index, "Population (use drop down list)"] = pop_choice
             df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
 
