@@ -3,38 +3,74 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import re
+import json
 
 st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Integrated Version)")
+st.title("🧾 Clinical Registry Review Tool (Final with Full Inclusion Criteria)")
 
-# ✅ Embedded CGT mapping from your approved products, pipeline, and preclinical lists
+# ✅ Embedded CGT mapping (simplified example; extend per your mapping file)
 cgt_map = {
-    # Approved therapies (Relevant)
-    "rpe65 mutation retinal dystrophy": "Relevant",
     "spinal muscular atrophy": "Relevant",
-    "hemophilia a": "Relevant",
     "duchenne muscular dystrophy": "Relevant",
-    "cerebral adrenoleukodystrophy": "Relevant",
-    "beta-thalassemia": "Relevant",
-    "multiple myeloma": "Relevant",
-    "b-all": "Relevant",
-    "dlbcl": "Relevant",
-    "mantle cell lymphoma": "Relevant",
-    "large b-cell lymphoma": "Relevant",
-    "prostate cancer": "Relevant",
-    "perianal fistula crohn's disease": "Relevant",
-    # Phase I-III pipeline (Likely Relevant)
+    "hemophilia a": "Relevant",
     "hemophilia b": "Likely Relevant",
     "sickle cell disease": "Likely Relevant",
-    "metastatic prostate cancer": "Likely Relevant",
-    "b-cell malignancies": "Likely Relevant",
-    "various solid tumors": "Likely Relevant",
-    # Preclinical (Likely Relevant)
     "type 1 diabetes": "Likely Relevant",
-    "hereditary angioedema": "Likely Relevant",
+    "asthma": "Not Relevant"
 }
 
-# Helper function: assess CGT relevance and provide study links
+# ✅ Sample condition onset mapping (extend with your full dataset)
+age_map = {
+    "spinal muscular atrophy": "birth",
+    "duchenne muscular dystrophy": "early childhood",
+    "hemophilia a": "infant",
+    "hemophilia b": "infant",
+    "sickle cell disease": "infant",
+    "type 1 diabetes": "childhood",
+    "asthma": "childhood"
+}
+
+# 🔧 Infant inclusion patterns
+include_patterns = [
+    r"(from|starting at|age)\s*0",
+    r"(from|starting at)\s*birth",
+    r"newborn",
+    r"infants?",
+    r"less than\s*(12|18|24)\s*months",
+    r"<\s*(12|18|24)\s*months",
+    r"<\s*(1|2)\s*years?",
+    r"up to\s*18\s*months",
+    r"up to\s*2\s*years",
+    r"0[-\s]*2\s*years",
+    r"0[-\s]*24\s*months",
+    r"from\s*1\s*year",
+    r"from\s*12\s*months",
+    r">\s*12\s*months",
+    r">\s*18\s*months",
+    r">\s*1\s*year"
+]
+
+# 🔧 Infant inclusion assessment function
+def assess_infant_inclusion(text, condition):
+    text_lower = text.lower() if pd.notna(text) else ""
+    
+    # Explicit inclusion criteria check
+    for pattern in include_patterns:
+        if re.search(pattern, text_lower):
+            return "Include infants"
+
+    # Condition-based onset mapping check for Likely
+    onset = age_map.get(condition, "").lower()
+    if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
+        return "Likely to include infants"
+
+    # Fallback for unlikely inclusion
+    if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
+        return "Unlikely to include infants but possible"
+
+    return "Uncertain"
+
+# 🔧 CGT relevance assessment function
 def assess_cgt_relevance_and_links(text, condition):
     links = []
     if pd.isna(text):
@@ -42,17 +78,14 @@ def assess_cgt_relevance_and_links(text, condition):
     text_lower = text.lower()
     condition_lower = condition.lower()
 
-    # Primary: check mapping
     relevance = cgt_map.get(condition_lower, None)
     if relevance:
         if relevance in ["Relevant", "Likely Relevant"]:
-            # ClinicalTrials.gov and Scholar links
             ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
             scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
             links.extend([ct_url, scholar_url])
         return relevance, links
 
-    # Secondary: fallback to keyword detection
     cgt_keywords = [
         "cell therapy", "gene therapy", "crispr-cas9 system", "talen", "zfn",
         "gene editing", "gene correction", "gene silencing", "reprogramming",
@@ -68,7 +101,23 @@ def assess_cgt_relevance_and_links(text, condition):
 
     return relevance, links
 
-# Load uploaded file and persist with session_state
+# 🔧 Contact email extractor
+def extract_email(url):
+    try:
+        r = requests.get(url, timeout=8)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        mail = soup.select_one("a[href^=mailto]")
+        if mail:
+            return mail['href'].replace('mailto:', '')
+        matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
+        if matches:
+            return matches[0]
+        return ""
+    except Exception as e:
+        print(f"⚠️ Error fetching {url}: {e}")
+        return ""
+
+# 🔧 Load uploaded file with session persistence
 uploaded_file = st.file_uploader("📂 Upload your registry Excel file", type=["xlsx"])
 
 if uploaded_file:
@@ -104,7 +153,11 @@ if uploaded_file:
             str(record.get("Brief Summary", ""))
         ])
 
-        # Assess CGT relevance and provide links
+        # Infant inclusion assessment
+        suggested_infant = assess_infant_inclusion(study_texts, condition)
+        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
+
+        # CGT relevance assessment
         suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
         st.caption(f"🧬 Suggested Cell/Gene Therapy Relevance: **{suggested_cgt}**")
 
@@ -112,23 +165,6 @@ if uploaded_file:
             st.markdown("🔗 **Related Preclinical/Clinical Study Links:**")
             for link in study_links:
                 st.markdown(f"- [{link}]({link})")
-
-        # Contact email extraction
-        def extract_email(url):
-            try:
-                r = requests.get(url, timeout=8)
-                soup = BeautifulSoup(r.text, 'html.parser')
-                mail = soup.select_one("a[href^=mailto]")
-                if mail:
-                    return mail['href'].replace('mailto:', '')
-                else:
-                    matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
-                    if matches:
-                        return matches[0]
-                return ""
-            except Exception as e:
-                print(f"⚠️ Error fetching {url}: {e}")
-                return ""
 
         email = st.text_input("📧 Contact Email (Column E)", extract_email(record["Web site"]))
 
@@ -154,7 +190,7 @@ if uploaded_file:
         if st.button("💾 Save This Record"):
             original_index = df_filtered.index[record_index]
             df.at[original_index, "contact information"] = email
-            df.at[original_index, "Population (use drop down list)"] = pop_choice
+            df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
             df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
 
