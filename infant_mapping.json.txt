@@ -1,7 +1,0 @@
-{
-  "spinal muscular atrophy": "gene therapy",
-  "duchenne muscular dystrophy": "gene therapy",
-  "hemophilia": "gene therapy",
-  "sickle cell disease": "gene editing",
-  "beta thalassemia": "gene therapy"
-}
