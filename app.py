@@ -5,32 +5,28 @@ from bs4 import BeautifulSoup
 import re
 import json
 
-st.set_page_config(page_title="Clinical Registry Review", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final with Full Inclusion Criteria)")
+st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
+st.title("🧾 Clinical Registry Review Tool (Final)")
 
-# ✅ Embedded CGT mapping (simplified example; extend per your mapping file)
-cgt_map = {
-    "spinal muscular atrophy": "Relevant",
-    "duchenne muscular dystrophy": "Relevant",
-    "hemophilia a": "Relevant",
-    "hemophilia b": "Likely Relevant",
-    "sickle cell disease": "Likely Relevant",
-    "type 1 diabetes": "Likely Relevant",
-    "asthma": "Not Relevant"
-}
+# -------------------------------
+# 1. Load JSON mapping files
+# -------------------------------
+@st.cache_data
+def load_cgt_mapping():
+    with open("cgt_mapping.json", "r") as f:
+        return json.load(f)
 
-# ✅ Sample condition onset mapping (extend with your full dataset)
-age_map = {
-    "spinal muscular atrophy": "birth",
-    "duchenne muscular dystrophy": "early childhood",
-    "hemophilia a": "infant",
-    "hemophilia b": "infant",
-    "sickle cell disease": "infant",
-    "type 1 diabetes": "childhood",
-    "asthma": "childhood"
-}
+@st.cache_data
+def load_age_mapping():
+    with open("infant_mapping.json", "r") as f:
+        return json.load(f)
 
-# 🔧 Infant inclusion patterns
+cgt_map = load_cgt_mapping()
+age_map = load_age_mapping()
+
+# -------------------------------
+# 2. Define infant inclusion patterns
+# -------------------------------
 include_patterns = [
     r"(from|starting at|age)\s*0",
     r"(from|starting at)\s*birth",
@@ -50,58 +46,81 @@ include_patterns = [
     r">\s*1\s*year"
 ]
 
-# 🔧 Infant inclusion assessment function
+# -------------------------------
+# 3. Define infant inclusion logic
+# -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
-    
-    # Explicit inclusion criteria check
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
 
-    # Condition-based onset mapping check for Likely
-    onset = age_map.get(condition, "").lower()
+    onset = age_map.get(condition.lower(), "").lower()
     if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
         return "Likely to include infants"
-
-    # Fallback for unlikely inclusion
     if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
         return "Unlikely to include infants but possible"
-
     return "Uncertain"
 
-# 🔧 CGT relevance assessment function
+# -------------------------------
+# 4. ClinicalTrials.gov API
+# -------------------------------
+def check_clinicaltrials_gov(condition):
+    try:
+        url = "https://clinicaltrials.gov/api/query/study_fields"
+        params = {
+            "expr": f"{condition} gene therapy",
+            "fields": "NCTId,Condition,BriefTitle,Phase,OverallStatus",
+            "min_rnk": 1,
+            "max_rnk": 3,
+            "fmt": "json"
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        studies = data['StudyFieldsResponse']['StudyFields']
+        links = []
+        for s in studies:
+            nct_id = s["NCTId"][0]
+            ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
+            links.append(ct_link)
+        return links
+    except Exception as e:
+        print(f"⚠️ ClinicalTrials.gov API error: {e}")
+        return []
+
+# -------------------------------
+# 5. CGT relevance logic
+# -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
-    if pd.isna(text):
-        text = ""
-    text_lower = text.lower()
     condition_lower = condition.lower()
 
     relevance = cgt_map.get(condition_lower, None)
     if relevance:
         if relevance in ["Relevant", "Likely Relevant"]:
-            ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
-            scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
-            links.extend([ct_url, scholar_url])
+            links += check_clinicaltrials_gov(condition)
         return relevance, links
 
-    cgt_keywords = [
-        "cell therapy", "gene therapy", "crispr-cas9 system", "talen", "zfn",
-        "gene editing", "gene correction", "gene silencing", "reprogramming",
-        "cgt", "c&gt", "car-t therapy"
-    ]
-    if any(kw in text_lower for kw in cgt_keywords):
+    cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
+                    "gene editing", "gene correction", "gene silencing", "reprogramming",
+                    "cgt", "c&gt", "car-t therapy"]
+    text_lower = text.lower() if pd.notna(text) else ""
+
+    if any(k in text_lower for k in cgt_keywords):
         relevance = "Likely Relevant"
-        ct_url = f"https://clinicaltrials.gov/ct2/results?cond={condition}&term=gene+therapy"
-        scholar_url = f"https://scholar.google.com/scholar?q={condition}+gene+therapy+preclinical"
-        links.extend([ct_url, scholar_url])
+        links += check_clinicaltrials_gov(condition)
     else:
         relevance = "Unlikely Relevant"
 
+    # Always add PubMed fallback
+    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
+    links.append(pubmed_url)
+
     return relevance, links
 
-# 🔧 Contact email extractor
+# -------------------------------
+# 6. Contact email scraper
+# -------------------------------
 def extract_email(url):
     try:
         r = requests.get(url, timeout=8)
@@ -110,15 +129,15 @@ def extract_email(url):
         if mail:
             return mail['href'].replace('mailto:', '')
         matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
-        if matches:
-            return matches[0]
-        return ""
+        return matches[0] if matches else ""
     except Exception as e:
-        print(f"⚠️ Error fetching {url}: {e}")
+        print(f"⚠️ Email extraction error: {e}")
         return ""
 
-# 🔧 Load uploaded file with session persistence
-uploaded_file = st.file_uploader("📂 Upload your registry Excel file", type=["xlsx"])
+# -------------------------------
+# 7. Streamlit app flow
+# -------------------------------
+uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
 if uploaded_file:
     if "df" not in st.session_state:
@@ -127,24 +146,24 @@ if uploaded_file:
     else:
         df = st.session_state.df
 
-    reviewer_name = st.text_input("Enter your name (Column F)", "Reseum")
+    reviewer_name = st.text_input("Your name (Column F)", "")
     df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
 
-    show_incomplete = st.checkbox("Show only incomplete (missing Population or Relevance)", value=True)
+    show_incomplete = st.checkbox("Show only incomplete rows", value=True)
     if show_incomplete:
         df_filtered = df_filtered[df_filtered["Population (use drop down list)"].isna() | df_filtered["Relevance to C&GT"].isna()]
 
     if df_filtered.empty:
-        st.success("🎉 All caught up! No matching rows found.")
+        st.success("🎉 All done, no incomplete rows.")
     else:
-        record_index = st.number_input("Select record", 0, len(df_filtered) - 1, step=1)
+        record_index = st.number_input("Select row", 0, len(df_filtered)-1, step=1)
         record = df_filtered.iloc[record_index]
         condition = record["Conditions"]
 
         st.subheader("🔎 Record Details")
         st.markdown(f"**Condition:** `{condition}`")
         st.markdown(f"**Study Title:** `{record['Study Title']}`")
-        st.markdown(f"[📄 Open Registry Link]({record['Web site']})")
+        st.markdown(f"[🔗 Open Registry Link]({record['Web site']})")
 
         study_texts = " ".join([
             str(record.get("Population (use drop down list)", "")),
@@ -153,51 +172,48 @@ if uploaded_file:
             str(record.get("Brief Summary", ""))
         ])
 
-        # Infant inclusion assessment
         suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
+        st.caption(f"🧒 Suggested: **{suggested_infant}**")
 
-        # CGT relevance assessment
         suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
-        st.caption(f"🧬 Suggested Cell/Gene Therapy Relevance: **{suggested_cgt}**")
+        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
 
         if study_links:
-            st.markdown("🔗 **Related Preclinical/Clinical Study Links:**")
+            st.markdown("🔗 **Links:**")
             for link in study_links:
                 st.markdown(f"- [{link}]({link})")
 
-        email = st.text_input("📧 Contact Email (Column E)", extract_email(record["Web site"]))
+        email = st.text_input("Contact email", extract_email(record["Web site"]))
 
-        # Reviewer inputs
-        pop_choice = st.radio("🧒 Infant Population (Column G)", [
+        pop_choice = st.radio("Infant Population", [
             "Include infants",
             "Likely to include infants",
             "Unlikely to include infants but possible",
             "Does not include infants",
             "Uncertain"
-        ], index=0 if pd.isna(record['Population (use drop down list)']) else 0)
+        ], index=0)
 
-        comments = st.text_area("🗒 Reviewer Comments (Column H)", value=record.get("Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
-
-        cg_choice = st.radio("🧬 Cell/Gene Therapy Relevance (Column I)", [
+        cg_choice = st.radio("Cell/Gene Therapy Relevance", [
             "Relevant",
             "Likely Relevant",
             "Unlikely Relevant",
             "Not Relevant",
             "Unsure"
-        ], index=0 if pd.isna(record['Relevance to C&GT']) else 0)
+        ], index=0)
 
-        if st.button("💾 Save This Record"):
+        comments = st.text_area("Reviewer Comments", value=record.get(
+            "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
+
+        if st.button("💾 Save"):
             original_index = df_filtered.index[record_index]
             df.at[original_index, "contact information"] = email
             df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
-            df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
-
+            df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             st.session_state.df = df
-            st.success("✅ Record updated and saved.")
+            st.success("✅ Saved!")
 
-        if st.button("📤 Export Updated Excel"):
-            st.session_state.df.to_excel("updated_registry_review.xlsx", index=False)
+        if st.button("⬇️ Export Updated Excel"):
+            df.to_excel("updated_registry_review.xlsx", index=False)
             with open("updated_registry_review.xlsx", "rb") as f:
                 st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
