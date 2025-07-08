@@ -9,7 +9,7 @@ import json
 # Page setup
 # -------------------------------
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
+st.title("🧾 Clinical Registry Review Tool (Reviewer Integrated)")
 
 # -------------------------------
 # Load mapping files
@@ -28,7 +28,7 @@ fda_map = load_fda_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 1. Assess infant inclusion
+# Infant inclusion function
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
@@ -73,61 +73,7 @@ def assess_infant_inclusion(text, condition):
     return "Uncertain"
 
 # -------------------------------
-# 2. Check ClinicalTrials.gov for active trials
-# -------------------------------
-def check_clinicaltrials_gov(condition):
-    try:
-        url = "https://clinicaltrials.gov/api/query/study_fields"
-        params = {
-            "expr": f"{condition} gene therapy",
-            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
-            "min_rnk": 1,
-            "max_rnk": 3,
-            "fmt": "json"
-        }
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        studies = data['StudyFieldsResponse']['StudyFields']
-
-        study_info = []
-        for s in studies:
-            study_info.append({
-                "nct_id": s["NCTId"][0],
-                "title": s["BriefTitle"][0],
-                "phase": s.get("Phase", ["N/A"])[0],
-                "status": s.get("OverallStatus", ["N/A"])[0],
-                "link": f"https://clinicaltrials.gov/ct2/show/{s['NCTId'][0]}"
-            })
-        return study_info
-
-    except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov error for {condition}: {e}")
-        return []
-
-# -------------------------------
-# 3. Check preclinical PubMed data
-# -------------------------------
-def check_preclinical_pubmed(condition):
-    try:
-        query = f"{condition} gene therapy preclinical OR animal model OR in vitro"
-        url = f"https://pubmed.ncbi.nlm.nih.gov/?term={query.replace(' ', '+')}"
-        r = requests.get(url, timeout=10)
-        soup = BeautifulSoup(r.text, 'html.parser')
-
-        results = []
-        for article in soup.select('.docsum-content'):
-            title = article.select_one('.docsum-title').get_text(strip=True)
-            link = "https://pubmed.ncbi.nlm.nih.gov" + article.select_one('.docsum-title')['href']
-            results.append({"title": title, "link": link})
-
-        return results if results else None
-
-    except Exception as e:
-        print(f"⚠️ PubMed preclinical error for {condition}: {e}")
-        return None
-
-# -------------------------------
-# 4. Assess CGT relevance
+# CGT relevance function
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
@@ -145,18 +91,49 @@ def assess_cgt_relevance_and_links(text, condition):
             return "Relevant (FDA Approved)", links
 
     # B. ClinicalTrials.gov
-    studies = check_clinicaltrials_gov(condition)
-    if studies:
-        links.extend(studies)
-        return "Relevant (Clinical Trials)", links
+    try:
+        url = "https://clinicaltrials.gov/api/query/study_fields"
+        params = {
+            "expr": f"{condition} gene therapy",
+            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
+            "min_rnk": 1,
+            "max_rnk": 3,
+            "fmt": "json"
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        studies = data['StudyFieldsResponse']['StudyFields']
+        for s in studies:
+            links.append({
+                "nct_id": s["NCTId"][0],
+                "title": s["BriefTitle"][0],
+                "phase": s.get("Phase", ["N/A"])[0],
+                "status": s.get("OverallStatus", ["N/A"])[0],
+                "link": f"https://clinicaltrials.gov/ct2/show/{s['NCTId'][0]}"
+            })
+        if studies:
+            return "Relevant (Clinical Trials)", links
+    except:
+        pass
 
-    # C. Preclinical pipeline
-    preclinical_results = check_preclinical_pubmed(condition)
-    if preclinical_results:
-        links.extend(preclinical_results)
-        return "Likely Relevant (Preclinical)", links
+    # C. Preclinical PubMed
+    try:
+        query = f"{condition} gene therapy preclinical OR animal model OR in vitro"
+        url = f"https://pubmed.ncbi.nlm.nih.gov/?term={query.replace(' ', '+')}"
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, 'html.parser')
 
-    # D. Keyword-based fallback
+        for article in soup.select('.docsum-content'):
+            title = article.select_one('.docsum-title').get_text(strip=True)
+            link = "https://pubmed.ncbi.nlm.nih.gov" + article.select_one('.docsum-title')['href']
+            links.append({"title": title, "link": link})
+
+        if links:
+            return "Likely Relevant (Preclinical)", links
+    except:
+        pass
+
+    # D. Keyword fallback
     cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
                     "gene editing", "gene correction", "gene silencing", "reprogramming",
                     "cgt", "c&gt", "car-t therapy"]
@@ -170,38 +147,41 @@ def assess_cgt_relevance_and_links(text, condition):
     return "Unsure", links
 
 # -------------------------------
-# 5. Streamlit App Flow
+# Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file, engine="openpyxl")
+    reviewer_name = st.text_input("👤 Enter your reviewer name to filter rows:")
 
-    st.subheader("🔍 Process each condition")
-    for i, row in df.iterrows():
-        condition = row["Conditions"] if "Conditions" in row else ""
-        study_texts = " ".join([
-            str(row.get("Population (use drop down list)", "")),
-            str(row.get("Conditions", "")),
-            str(row.get("Study Title", "")),
-            str(row.get("Brief Summary", ""))
-        ])
+    if reviewer_name:
+        if "Reviewer" in df.columns:
+            df_filtered = df[df["Reviewer"].str.contains(reviewer_name, case=False, na=False)]
+            st.write(f"✅ {len(df_filtered)} rows found for reviewer '{reviewer_name}'.")
 
-        st.markdown(f"**Condition:** {condition}")
+            for i, row in df_filtered.iterrows():
+                condition = row.get("Conditions", "")
+                study_texts = " ".join([
+                    str(row.get("Population (use drop down list)", "")),
+                    str(row.get("Conditions", "")),
+                    str(row.get("Study Title", "")),
+                    str(row.get("Brief Summary", ""))
+                ])
 
-        infant_inclusion = assess_infant_inclusion(study_texts, condition)
-        cgt_relevance, links = assess_cgt_relevance_and_links(study_texts, condition)
+                infant_inclusion = assess_infant_inclusion(study_texts, condition)
+                cgt_relevance, links = assess_cgt_relevance_and_links(study_texts, condition)
 
-        st.write(f"🧒 Infant Inclusion: {infant_inclusion}")
-        st.write(f"🧬 CGT Relevance: {cgt_relevance}")
+                df.loc[i, "Infant Inclusion"] = infant_inclusion
+                df.loc[i, "CGT Relevance"] = cgt_relevance
 
-        if links:
-            st.markdown("🔗 **Related Links:**")
-            for l in links:
-                st.markdown(f"- [{l['title']}]({l['link']})")
+            st.success("✅ Updated the Excel with infant inclusion and CGT relevance.")
 
-    # Save updated file if needed
-    if st.button("⬇️ Export Processed Data"):
-        df.to_excel("processed_registry_review.xlsx", index=False)
-        with open("processed_registry_review.xlsx", "rb") as f:
-            st.download_button("⬇️ Download File", f, file_name="processed_registry_review.xlsx")
+            # Download updated Excel
+            if st.button("⬇️ Download Updated Excel"):
+                df.to_excel("updated_registry_review.xlsx", index=False)
+                with open("updated_registry_review.xlsx", "rb") as f:
+                    st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
+
+        else:
+            st.error("❌ 'Reviewer' column not found in your Excel.")
