@@ -6,7 +6,7 @@ import re
 import json
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final)")
+st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
 
 # -------------------------------
 # 1. Load JSON mapping files
@@ -47,7 +47,7 @@ include_patterns = [
 ]
 
 # -------------------------------
-# 3. Define infant inclusion logic
+# 3. Infant inclusion logic
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
@@ -63,29 +63,69 @@ def assess_infant_inclusion(text, condition):
     return "Uncertain"
 
 # -------------------------------
-# 4. ClinicalTrials.gov API
+# 4. ClinicalTrials.gov API with contacts and locations
 # -------------------------------
 def check_clinicaltrials_gov(condition):
     try:
-        url = "https://clinicaltrials.gov/api/query/study_fields"
-        params = {
+        search_url = "https://clinicaltrials.gov/api/query/study_fields"
+        search_params = {
             "expr": f"{condition} gene therapy",
-            "fields": "NCTId,Condition,BriefTitle,Phase,OverallStatus",
+            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
             "min_rnk": 1,
             "max_rnk": 3,
             "fmt": "json"
         }
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        studies = data['StudyFieldsResponse']['StudyFields']
-        links = []
+        search_r = requests.get(search_url, params=search_params, timeout=10)
+        search_data = search_r.json()
+        studies = search_data['StudyFieldsResponse']['StudyFields']
+        study_info = []
+
         for s in studies:
             nct_id = s["NCTId"][0]
+            title = s["BriefTitle"][0]
+            phase = s.get("Phase", ["N/A"])[0]
+            status = s.get("OverallStatus", ["N/A"])[0]
             ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
-            links.append(ct_link)
-        return links
+
+            detail_url = f"https://clinicaltrials.gov/api/query/full_studies"
+            detail_params = {"expr": nct_id, "fmt": "json"}
+            detail_r = requests.get(detail_url, params=detail_params, timeout=10)
+            detail_data = detail_r.json()
+
+            try:
+                full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
+                locations = []
+                contacts = []
+
+                if 'Locations' in full_study:
+                    for loc in full_study['Locations']:
+                        loc_name = loc.get('LocationFacility', 'N/A')
+                        loc_city = loc.get('LocationCity', 'N/A')
+                        loc_country = loc.get('LocationCountry', 'N/A')
+                        locations.append(f"{loc_name}, {loc_city}, {loc_country}")
+
+                overall_contact = full_study.get('OverallOfficial', [])
+                for contact in overall_contact:
+                    contacts.append(contact.get('LastName', '') + " - " + contact.get('Role', ''))
+
+            except Exception as e:
+                locations = ["No location data found."]
+                contacts = ["No contact data found."]
+                print(f"⚠️ Detail parsing error for {nct_id}: {e}")
+
+            study_info.append({
+                "nct_id": nct_id,
+                "title": title,
+                "phase": phase,
+                "status": status,
+                "link": ct_link,
+                "contacts": contacts,
+                "locations": locations
+            })
+
+        return study_info
     except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov API error: {e}")
+        print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
         return []
 
 # -------------------------------
@@ -98,7 +138,8 @@ def assess_cgt_relevance_and_links(text, condition):
     relevance = cgt_map.get(condition_lower, None)
     if relevance:
         if relevance in ["Relevant", "Likely Relevant"]:
-            links += check_clinicaltrials_gov(condition)
+            studies = check_clinicaltrials_gov(condition)
+            links.extend(studies)
         return relevance, links
 
     cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
@@ -108,13 +149,14 @@ def assess_cgt_relevance_and_links(text, condition):
 
     if any(k in text_lower for k in cgt_keywords):
         relevance = "Likely Relevant"
-        links += check_clinicaltrials_gov(condition)
+        studies = check_clinicaltrials_gov(condition)
+        links.extend(studies)
     else:
         relevance = "Unlikely Relevant"
 
-    # Always add PubMed fallback
+    # PubMed fallback
     pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
-    links.append(pubmed_url)
+    links.append({"title": "PubMed Search", "link": pubmed_url, "phase": "N/A", "status": "N/A", "contacts": [], "locations": []})
 
     return relevance, links
 
@@ -179,9 +221,13 @@ if uploaded_file:
         st.caption(f"🧬 Suggested: **{suggested_cgt}**")
 
         if study_links:
-            st.markdown("🔗 **Links:**")
-            for link in study_links:
-                st.markdown(f"- [{link}]({link})")
+            st.markdown("🔗 **Related Studies & Database Links:**")
+            for s in study_links:
+                st.markdown(f"- **{s['title']}** (Phase: {s['phase']}, Status: {s['status']}) [View Study]({s['link']})")
+                if s['contacts']:
+                    st.markdown(f"  **Contacts:** {', '.join(s['contacts'])}")
+                if s['locations']:
+                    st.markdown(f"  **Locations:** {', '.join(s['locations'])}")
 
         email = st.text_input("Contact email", extract_email(record["Web site"]))
 
