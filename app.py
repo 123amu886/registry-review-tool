@@ -25,7 +25,7 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Define infant inclusion patterns
+# 2. Infant inclusion patterns
 # -------------------------------
 include_patterns = [
     r"(from|starting at|age)\s*0",
@@ -87,31 +87,36 @@ def check_clinicaltrials_gov(condition):
             status = s.get("OverallStatus", ["N/A"])[0]
             ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
 
-            detail_url = f"https://clinicaltrials.gov/api/query/full_studies"
+            detail_url = "https://clinicaltrials.gov/api/query/full_studies"
             detail_params = {"expr": nct_id, "fmt": "json"}
             detail_r = requests.get(detail_url, params=detail_params, timeout=10)
             detail_data = detail_r.json()
 
+            contacts = []
+            locations = []
+
             try:
                 full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
-                locations = []
-                contacts = []
+                protocol_section = full_study.get('ProtocolSection', {})
+                contacts_module = protocol_section.get('ContactsLocationsModule', {})
 
-                if 'Locations' in full_study:
-                    for loc in full_study['Locations']:
-                        loc_name = loc.get('LocationFacility', 'N/A')
-                        loc_city = loc.get('LocationCity', 'N/A')
-                        loc_country = loc.get('LocationCountry', 'N/A')
-                        locations.append(f"{loc_name}, {loc_city}, {loc_country}")
+                overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
+                for contact in overall_officials:
+                    name = contact.get('LastName', 'N/A')
+                    role = contact.get('Role', 'N/A')
+                    contacts.append(f"{name} ({role})")
 
-                overall_contact = full_study.get('OverallOfficial', [])
-                for contact in overall_contact:
-                    contacts.append(contact.get('LastName', '') + " - " + contact.get('Role', ''))
+                location_list = contacts_module.get('LocationList', {}).get('Location', [])
+                for loc in location_list:
+                    facility = loc.get('LocationFacility', 'N/A')
+                    city = loc.get('LocationCity', 'N/A')
+                    country = loc.get('LocationCountry', 'N/A')
+                    locations.append(f"{facility}, {city}, {country}")
 
             except Exception as e:
-                locations = ["No location data found."]
-                contacts = ["No contact data found."]
                 print(f"⚠️ Detail parsing error for {nct_id}: {e}")
+                contacts = ["No contact data found."]
+                locations = ["No location data found."]
 
             study_info.append({
                 "nct_id": nct_id,
@@ -124,6 +129,7 @@ def check_clinicaltrials_gov(condition):
             })
 
         return study_info
+
     except Exception as e:
         print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
         return []
@@ -154,9 +160,15 @@ def assess_cgt_relevance_and_links(text, condition):
     else:
         relevance = "Unlikely Relevant"
 
-    # PubMed fallback
     pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
-    links.append({"title": "PubMed Search", "link": pubmed_url, "phase": "N/A", "status": "N/A", "contacts": [], "locations": []})
+    links.append({
+        "title": "PubMed Search",
+        "link": pubmed_url,
+        "phase": "N/A",
+        "status": "N/A",
+        "contacts": [],
+        "locations": []
+    })
 
     return relevance, links
 
