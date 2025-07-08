@@ -28,42 +28,7 @@ fda_map = load_fda_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 1. Extract ClinicalTrials.gov contacts & locations
-# -------------------------------
-def extract_ctgov_contacts_locations(nct_id):
-    try:
-        detail_url = "https://clinicaltrials.gov/api/query/full_studies"
-        params = {"expr": nct_id, "fmt": "json"}
-        r = requests.get(detail_url, params=params, timeout=10)
-        data = r.json()
-
-        contacts, locations = [], []
-
-        full_study = data['FullStudiesResponse']['FullStudies'][0]['Study']
-        protocol = full_study.get('ProtocolSection', {})
-        contacts_module = protocol.get('ContactsLocationsModule', {})
-
-        overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
-        for contact in overall_officials:
-            name = contact.get('LastName', 'N/A')
-            role = contact.get('Role', 'N/A')
-            contacts.append(f"{name} ({role})")
-
-        location_list = contacts_module.get('LocationList', {}).get('Location', [])
-        for loc in location_list:
-            facility = loc.get('LocationFacility', 'N/A')
-            city = loc.get('LocationCity', 'N/A')
-            country = loc.get('LocationCountry', 'N/A')
-            locations.append(f"{facility}, {city}, {country}")
-
-        return contacts, locations
-
-    except Exception as e:
-        print(f"⚠️ Contact/location error for {nct_id}: {e}")
-        return ["No contact data found."], ["No location data found."]
-
-# -------------------------------
-# 2. Assess infant inclusion
+# 1. Assess infant inclusion
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
@@ -108,7 +73,7 @@ def assess_infant_inclusion(text, condition):
     return "Uncertain"
 
 # -------------------------------
-# 3. Check ClinicalTrials.gov for active trials
+# 2. Check ClinicalTrials.gov for active trials
 # -------------------------------
 def check_clinicaltrials_gov(condition):
     try:
@@ -140,7 +105,7 @@ def check_clinicaltrials_gov(condition):
         return []
 
 # -------------------------------
-# 4. Check preclinical PubMed data
+# 3. Check preclinical PubMed data
 # -------------------------------
 def check_preclinical_pubmed(condition):
     try:
@@ -162,7 +127,7 @@ def check_preclinical_pubmed(condition):
         return None
 
 # -------------------------------
-# 5. Assess CGT relevance
+# 4. Assess CGT relevance
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
@@ -205,31 +170,38 @@ def assess_cgt_relevance_and_links(text, condition):
     return "Unsure", links
 
 # -------------------------------
-# 6. Streamlit App Flow
+# 5. Streamlit App Flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file, engine="openpyxl")
-    df.columns = [col.lower() for col in df.columns]
-    nct_col = next((col for col in df.columns if "nct" in col), None)
 
-    if nct_col:
-        contacts_all, locations_all = [], []
-        for nct_id in df[nct_col].dropna():
-            contacts, locations = extract_ctgov_contacts_locations(nct_id)
-            contacts_all.append("; ".join(contacts))
-            locations_all.append("; ".join(locations))
+    st.subheader("🔍 Process each condition")
+    for i, row in df.iterrows():
+        condition = row["Conditions"] if "Conditions" in row else ""
+        study_texts = " ".join([
+            str(row.get("Population (use drop down list)", "")),
+            str(row.get("Conditions", "")),
+            str(row.get("Study Title", "")),
+            str(row.get("Brief Summary", ""))
+        ])
 
-        df["CT_Contacts"] = contacts_all
-        df["CT_Locations"] = locations_all
-        st.success(f"✅ Extracted contacts & locations for {len(df[nct_col].dropna())} studies.")
+        st.markdown(f"**Condition:** {condition}")
 
-    else:
-        st.error("❌ NCT ID column not found in your Excel. Please check column naming.")
+        infant_inclusion = assess_infant_inclusion(study_texts, condition)
+        cgt_relevance, links = assess_cgt_relevance_and_links(study_texts, condition)
 
-    # Save updated file
-    if st.button("⬇️ Export Updated Excel"):
-        df.to_excel("updated_registry_review_with_contacts.xlsx", index=False)
-        with open("updated_registry_review_with_contacts.xlsx", "rb") as f:
-            st.download_button("⬇️ Download File", f, file_name="updated_registry_review_with_contacts.xlsx")
+        st.write(f"🧒 Infant Inclusion: {infant_inclusion}")
+        st.write(f"🧬 CGT Relevance: {cgt_relevance}")
+
+        if links:
+            st.markdown("🔗 **Related Links:**")
+            for l in links:
+                st.markdown(f"- [{l['title']}]({l['link']})")
+
+    # Save updated file if needed
+    if st.button("⬇️ Export Processed Data"):
+        df.to_excel("processed_registry_review.xlsx", index=False)
+        with open("processed_registry_review.xlsx", "rb") as f:
+            st.download_button("⬇️ Download File", f, file_name="processed_registry_review.xlsx")
