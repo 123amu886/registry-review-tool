@@ -3,24 +3,77 @@
     "condition": "spinal muscular atrophy",
     "approval_status": "FDA approved",
     "type": "AAV gene therapy (in vivo)",
-    "developer": "Novartis"
+    "developer": "Novartis",
+    "age_group": "pediatric"
   },
   "luxturna": {
     "condition": "RPE65 mutation retinal dystrophy",
     "approval_status": "FDA approved",
     "type": "AAV gene therapy (in vivo)",
-    "developer": "Spark Therapeutics"
+    "developer": "Spark Therapeutics",
+    "age_group": "pediatric"
   },
   "elevidys": {
     "condition": "duchenne muscular dystrophy",
     "approval_status": "FDA approved",
     "type": "AAV gene therapy (in vivo)",
-    "developer": "Sarepta Therapeutics"
+    "developer": "Sarepta Therapeutics",
+    "age_group": "pediatric"
   },
   "roctavian": {
     "condition": "hemophilia A",
     "approval_status": "FDA approved",
     "type": "AAV gene therapy (in vivo)",
-    "developer": "BioMarin"
+    "developer": "BioMarin",
+    "age_group": "adult"
+  },
+  "adstiladrin": {
+    "condition": "non-muscle invasive bladder cancer",
+    "approval_status": "FDA approved",
+    "type": "gene therapy (nadofaragene firadenovec-vncg)",
+    "developer": "Ferring Pharmaceuticals",
+    "age_group": "adult"
+  },
+  "kymriah": {
+    "condition": "b-cell acute lymphoblastic leukemia",
+    "approval_status": "FDA approved",
+    "type": "CAR-T cell therapy",
+    "developer": "Novartis",
+    "age_group": "pediatric"
+  },
+  "yescarta": {
+    "condition": "large b-cell lymphoma",
+    "approval_status": "FDA approved",
+    "type": "CAR-T cell therapy",
+    "developer": "Gilead Sciences",
+    "age_group": "adult"
+  },
+  "breyanzi": {
+    "condition": "large b-cell lymphoma",
+    "approval_status": "FDA approved",
+    "type": "CAR-T cell therapy",
+    "developer": "Bristol Myers Squibb",
+    "age_group": "adult"
+  },
+  "ide-cel": {
+    "condition": "multiple myeloma",
+    "approval_status": "FDA approved",
+    "type": "CAR-T cell therapy",
+    "developer": "Bristol Myers Squibb",
+    "age_group": "adult"
+  },
+  "betibeglogene autotemcel": {
+    "condition": "beta-thalassemia",
+    "approval_status": "Phase I/II",
+    "type": "lentiviral gene therapy (ex vivo)",
+    "developer": "bluebird bio",
+    "age_group": "pediatric"
+  },
+  "amyt-101": {
+    "condition": "x-linked hypohidrotic ectodermal dysplasia",
+    "approval_status": "Phase I",
+    "type": "gene therapy (preclinical AAV)",
+    "developer": "Amryt Pharma",
+    "age_group": "pediatric"
   }
 }
