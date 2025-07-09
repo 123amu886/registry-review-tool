@@ -6,267 +6,150 @@ import re
 import json
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
+st.title("🧾 Clinical Registry Review Tool (Final Integrated with FDA & Pipeline CSV)")
 
 # -------------------------------
-# 1. Load JSON mapping files
+# 1. Load CGT and Infant mappings
 # -------------------------------
 @st.cache_data
-def load_cgt_mapping():
-    with open("cgt_mapping.json", "r") as f:
+def load_json(filename):
+    with open(filename, "r") as f:
         return json.load(f)
 
-@st.cache_data
-def load_age_mapping():
-    with open("infant_mapping.json", "r") as f:
-        return json.load(f)
-
-@st.cache_data
-def load_fda_approved():
-    with open("fda_approved_gene_therapies.json", "r") as f:
-        return json.load(f)
-
-cgt_map = load_cgt_mapping()
-age_map = load_age_mapping()
-fda_approved_map = load_fda_approved()
+cgt_map = load_json("cgt_mapping.json")
+age_map = load_json("infant_mapping.json")
 
 # -------------------------------
-# 2. Infant inclusion logic
+# 2. Load FDA approved therapies + optional pipeline Phase I data
+# -------------------------------
+@st.cache_data
+def load_fda_and_pipeline():
+    therapies = {}
+    # FDA scraping
+    url = "https://www.fda.gov/vaccines-blood-biologics/cellular-gene-therapy-products/approved-cellular-and-gene-therapy-products"
+    r = requests.get(url, timeout=10)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    table = soup.find("table")
+    if table:
+        for row in table.find_all("tr")[1:]:
+            cols = row.find_all("td")
+            if len(cols) >= 4:
+                therapy_name = cols[0].get_text(strip=True).lower()
+                indication = cols[1].get_text(strip=True).lower()
+                sponsor = cols[2].get_text(strip=True)
+                approval_date = cols[3].get_text(strip=True)
+                therapy_type = "gene or cell therapy"
+                if "car-t" in therapy_name or "car t" in indication:
+                    therapy_type = "CAR-T cell therapy"
+                elif "gene therapy" in indication or "gene therapy" in therapy_name:
+                    therapy_type = "Gene therapy"
+                therapies[therapy_name] = {
+                    "condition": indication,
+                    "approval_status": "FDA approved",
+                    "type": therapy_type,
+                    "developer": sponsor,
+                    "approval_date": approval_date,
+                    "age_group": "unknown"
+                }
+    # Optional pipeline CSV integration
+    try:
+        pipeline_df = pd.read_csv('pipeline_phase1.csv')
+        for _, row in pipeline_df.iterrows():
+            therapies[row['therapy_name'].lower()] = {
+                "condition": row['condition'].lower(),
+                "approval_status": row['phase'],
+                "type": row['therapy_type'],
+                "developer": row['developer'],
+                "approval_date": "N/A",
+                "age_group": row.get('age_group', 'unknown')
+            }
+    except Exception as e:
+        print(f"⚠️ Pipeline CSV integration skipped or errored: {e}")
+
+    return therapies
+
+fda_approved_map = load_fda_and_pipeline()
+
+# -------------------------------
+# 3. Infant inclusion logic (any “up to …” phrase = Likely)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
-
     include_patterns = [
-        r"from\s*0",
-        r"starting at birth",
-        r"newborn",
-        r"infants?",
-        r"less than\s*(12|18|24)\s*months?",
-        r"<\s*(12|18|24)\s*months?",
-        r"<\s*(1|2)\s*years?",
-        r"up to\s*18\s*months?",
-        r"up to\s*2\s*years?",
-        r"0[-\s]*2\s*years?",
-        r"0[-\s]*24\s*months?",
-        r"from\s*1\s*year",
-        r"from\s*12\s*months",
-        r">\s*12\s*months",
-        r">\s*18\s*months",
-        r">\s*1\s*year"
+        r"from\s*0", r"starting at birth", r"newborn", r"infants?",
+        r"less than\s*(12|18|24)\s*months?", r"<\s*(12|18|24)\s*months?",
+        r"<\s*(1|2)\s*years?", r"up to\s*18\s*months?", r"up to\s*2\s*years?",
+        r"0[-\s]*2\s*years?", r"0[-\s]*24\s*months?", r"from\s*1\s*year",
+        r"from\s*12\s*months", r">\s*12\s*months", r">\s*18\s*months", r">\s*1\s*year"
     ]
-
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
-
-    likely_patterns = [
-        r"0\s*to",
-        r"6\s*months?\s*to",
-        r"12\s*months?\s*to",
-        r"1\s*year\s*to",
-        r"18\s*months?\s*to",
-        r"up to"
-    ]
-
+    if "up to" in text_lower:
+        return "Likely to include infants"
+    likely_patterns = [r"0\s*to", r"6\s*months?\s*to", r"12\s*months?\s*to", r"1\s*year\s*to", r"18\s*months?\s*to"]
     for pattern in likely_patterns:
         if re.search(pattern, text_lower):
             return "Likely to include infants"
-
     over_two_years = re.search(r"(>\s*2\s*years?|>\s*24\s*months?)", text_lower)
     age_3_or_more = re.search(r"(from|starting at|minimum age)\s*(3|4|5|\d{2,})\s*(years?)", text_lower)
-
     if over_two_years or age_3_or_more:
         return "Does not include infants"
-
     return "Does not include infants"
 
 # -------------------------------
-# 3. FDA approved therapy check
+# 4. FDA approval check
 # -------------------------------
 def check_fda_approved(condition):
     condition_lower = condition.lower()
     approved_info = []
     for therapy, details in fda_approved_map.items():
         if details["condition"].lower() == condition_lower:
-            approved_info.append({
-                "therapy": therapy,
-                "type": details["type"],
-                "developer": details["developer"],
-                "approval_status": details["approval_status"],
-                "age_group": details.get("age_group", "unknown")
-            })
+            approved_info.append(details)
     return approved_info
 
 # -------------------------------
-# 4. ClinicalTrials.gov API check
-# -------------------------------
-def check_clinicaltrials_gov(condition):
-    try:
-        search_url = "https://clinicaltrials.gov/api/query/study_fields"
-        search_params = {
-            "expr": f"{condition} gene therapy",
-            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
-            "min_rnk": 1,
-            "max_rnk": 3,
-            "fmt": "json"
-        }
-        search_r = requests.get(search_url, params=search_params, timeout=10)
-        search_data = search_r.json()
-        studies = search_data['StudyFieldsResponse']['StudyFields']
-        study_info = []
-
-        for s in studies:
-            nct_id = s["NCTId"][0]
-            title = s["BriefTitle"][0]
-            phase = s.get("Phase", ["N/A"])[0]
-            status = s.get("OverallStatus", ["N/A"])[0]
-            ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
-
-            study_info.append({
-                "nct_id": nct_id,
-                "title": title,
-                "phase": phase,
-                "status": status,
-                "link": ct_link,
-                "contacts": [],
-                "locations": []
-            })
-
-        return study_info
-
-    except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
-        return []
-
-# -------------------------------
-# 5. CGT relevance assessment
-# -------------------------------
-def assess_cgt_relevance_and_links(text, condition):
-    links = []
-    
-    fda_info = check_fda_approved(condition)
-    if fda_info:
-        age_group = fda_info[0].get('age_group', 'unknown')
-        relevance = "Relevant" if age_group == "pediatric" else "Likely Relevant"
-        links.append({
-            "title": f"FDA Approved Therapy: {fda_info[0]['therapy']} ({fda_info[0]['type']}, {fda_info[0]['developer']})",
-            "link": "N/A",
-            "phase": "Approved",
-            "status": fda_info[0]['approval_status'],
-            "contacts": [],
-            "locations": [],
-            "age_group": age_group
-        })
-        return relevance, links
-
-    studies = check_clinicaltrials_gov(condition)
-    if studies:
-        links.extend(studies)
-        return "Likely Relevant", links
-
-    google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
-    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
-
-    links.append({
-        "title": "Google Search: Is there a gene therapy for this condition?",
-        "link": google_query,
-        "phase": "N/A",
-        "status": "N/A",
-        "contacts": [],
-        "locations": []
-    })
-
-    links.append({
-        "title": "PubMed Search",
-        "link": pubmed_url,
-        "phase": "N/A",
-        "status": "N/A",
-        "contacts": [],
-        "locations": []
-    })
-
-    return "Unsure", links
-
-# -------------------------------
-# 6. Streamlit app flow
+# 5. Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
-
 if uploaded_file:
-    if "df" not in st.session_state:
-        df = pd.read_excel(uploaded_file, engine="openpyxl")
-        st.session_state.df = df.copy()
-    else:
-        df = st.session_state.df
-
+    df = pd.read_excel(uploaded_file, engine="openpyxl")
     reviewer_name = st.text_input("Your name (Column F)", "")
     df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
-
     show_incomplete = st.checkbox("Show only incomplete rows", value=True)
     if show_incomplete:
         df_filtered = df_filtered[df_filtered["Population (use drop down list)"].isna() | df_filtered["Relevance to C&GT"].isna()]
-
     if df_filtered.empty:
         st.success("🎉 All done, no incomplete rows.")
     else:
         record_index = st.number_input("Select row", 0, len(df_filtered)-1, step=1)
         record = df_filtered.iloc[record_index]
         condition = record["Conditions"]
-
         st.subheader("🔎 Record Details")
         st.markdown(f"**Condition:** `{condition}`")
-        st.markdown(f"**Study Title:** `{record['Study Title']}`")
-        st.markdown(f"[🔗 Open Registry Link]({record['Web site']})")
-
-        study_texts = " ".join([
-            str(record.get("Population (use drop down list)", "")),
-            str(record.get("Conditions", "")),
-            str(record.get("Study Title", "")),
-            str(record.get("Brief Summary", ""))
-        ])
-
-        suggested_infant = assess_infant_inclusion(study_texts, condition)
+        suggested_infant = assess_infant_inclusion(" ".join([str(record.get(c, "")) for c in df.columns]), condition)
         st.caption(f"🧒 Suggested: **{suggested_infant}**")
-
-        suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
-        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
-
-        if study_links:
-            st.markdown("🔗 **Related Studies & Database Links:**")
-            for s in study_links:
-                st.markdown(f"- **{s['title']}** (Phase: {s['phase']}, Status: {s['status']}) [View Study]({s['link']})")
-
-        pop_choice = st.radio("Infant Population", [
-            "Include infants",
-            "Likely to include infants",
-            "Does not include infants"
-        ], index=0)
-
-        cg_choice = st.radio("Cell/Gene Therapy Relevance", [
-            "Relevant",
-            "Likely Relevant",
-            "Unlikely Relevant",
-            "Not Relevant",
-            "Unsure"
-        ], index=0)
-
-        comments = st.text_area("Reviewer Comments", value=record.get(
-            "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
-
+        fda_info = check_fda_approved(condition)
+        if fda_info:
+            for therapy in fda_info:
+                st.markdown(f"✅ **FDA Therapy:** {therapy['type']} by {therapy['developer']} | Status: {therapy['approval_status']}")
+        else:
+            st.markdown("⚠️ No FDA approved therapy found.")
+        pop_choice = st.radio("Infant Population", ["Include infants", "Likely to include infants", "Does not include infants"], index=0)
+        cg_choice = st.radio("Cell/Gene Therapy Relevance", ["Relevant", "Likely Relevant", "Unlikely Relevant", "Not Relevant", "Unsure"], index=0)
+        comments = st.text_area("Reviewer Comments", value=record.get("Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
         if st.button("💾 Save"):
-            original_index = df_filtered.index[record_index]
-            df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
-            df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
-            df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
-            st.session_state.df = df
+            df.at[df_filtered.index[record_index], "Population (use drop down list)"] = pop_choice
+            df.at[df_filtered.index[record_index], "Relevance to C&GT"] = cg_choice
+            df.at[df_filtered.index[record_index], "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             st.success("✅ Saved!")
-
         if st.button("⬇️ Export Updated Excel"):
             df.to_excel("updated_registry_review.xlsx", index=False)
             with open("updated_registry_review.xlsx", "rb") as f:
                 st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
 
-# ✅ End of final integrated app.py
-# Save this file to GitHub as app.py and run with `streamlit run app.py`
+# ✅ End of final deploy-ready `app.py` for GitHub
+# Save this as `app.py` and run with `streamlit run app.py`
+# Ensure `pipeline_phase1.csv` is in your working directory for pipeline integration.
 
-# Let me know if you want the FDA auto-update script or testing checklist included next.
+# Let me know if you want this packaged with a requirements.txt and deployment YAML next.
