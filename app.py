@@ -55,29 +55,30 @@ def assess_infant_inclusion(text, condition):
         r">\s*1\s*year"
     ]
 
-    likely_patterns = [
-        r"from\s*0",
-        r"from\s*6\s*months",
-        r"from\s*1\s*year",
-        r"from\s*12\s*months",
-        r"up to"
-    ]
-
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
+
+    likely_patterns = [
+        r"0\s*to",
+        r"6\s*months?\s*to",
+        r"12\s*months?\s*to",
+        r"1\s*year\s*to",
+        r"18\s*months?\s*to",
+        r"up to"
+    ]
 
     for pattern in likely_patterns:
         if re.search(pattern, text_lower):
             return "Likely to include infants"
 
-    if re.search(r"(2\s*years?|24\s*months?)", text_lower):
-        return "Unlikely to include infants but possible"
+    over_two_years = re.search(r"(>\s*2\s*years?|>\s*24\s*months?)", text_lower)
+    age_3_or_more = re.search(r"(from|starting at|minimum age)\s*(3|4|5|\d{2,})\s*(years?)", text_lower)
 
-    if re.search(r"(from|starting at|minimum age)\s*(3|4|5|\d{2,})\s*(years?)", text_lower):
+    if over_two_years or age_3_or_more:
         return "Does not include infants"
 
-    return "Uncertain"
+    return "Does not include infants"
 
 # -------------------------------
 # 3. FDA approved therapy check
@@ -91,7 +92,8 @@ def check_fda_approved(condition):
                 "therapy": therapy,
                 "type": details["type"],
                 "developer": details["developer"],
-                "approval_status": details["approval_status"]
+                "approval_status": details["approval_status"],
+                "age_group": details.get("age_group", "unknown")
             })
     return approved_info
 
@@ -142,26 +144,26 @@ def check_clinicaltrials_gov(condition):
 def assess_cgt_relevance_and_links(text, condition):
     links = []
     
-    # FDA approved therapy check
     fda_info = check_fda_approved(condition)
     if fda_info:
+        age_group = fda_info[0].get('age_group', 'unknown')
+        relevance = "Relevant" if age_group == "pediatric" else "Likely Relevant"
         links.append({
             "title": f"FDA Approved Therapy: {fda_info[0]['therapy']} ({fda_info[0]['type']}, {fda_info[0]['developer']})",
             "link": "N/A",
             "phase": "Approved",
             "status": fda_info[0]['approval_status'],
             "contacts": [],
-            "locations": []
+            "locations": [],
+            "age_group": age_group
         })
-        return "Relevant", links
+        return relevance, links
 
-    # ClinicalTrials.gov check
     studies = check_clinicaltrials_gov(condition)
     if studies:
         links.extend(studies)
         return "Likely Relevant", links
 
-    # Google/PubMed fallback
     google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
     pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
 
@@ -237,9 +239,7 @@ if uploaded_file:
         pop_choice = st.radio("Infant Population", [
             "Include infants",
             "Likely to include infants",
-            "Unlikely to include infants but possible",
-            "Does not include infants",
-            "Uncertain"
+            "Does not include infants"
         ], index=0)
 
         cg_choice = st.radio("Cell/Gene Therapy Relevance", [
@@ -266,6 +266,7 @@ if uploaded_file:
             with open("updated_registry_review.xlsx", "rb") as f:
                 st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
 
-# END OF FINAL INTEGRATED APP.PY
+# ✅ End of final integrated app.py
+# Save this file to GitHub as app.py and run with `streamlit run app.py`
 
-# Testing: Run with `streamlit run app.py` ensuring all three JSON files are in the working directory.
+# Let me know if you want the FDA auto-update script or testing checklist included next.
