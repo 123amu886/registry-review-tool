@@ -26,14 +26,14 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (Updated)
+# 2. Infant inclusion logic (Improved handling of age thresholds)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
     condition_lower = condition.lower()
     onset = age_map.get(condition_lower, "").lower()
 
-    # Helper regex patterns
+    # Patterns explicitly for "Include infants" (strictly max 2 years, no generic 'from 1 year' here)
     include_patterns = [
         r"from\s*0",
         r"starting at birth",
@@ -45,41 +45,51 @@ def assess_infant_inclusion(text, condition):
         r"up to\s*(18|2\s*years?)",
         r"0[-\s]*2\s*years",
         r"0[-\s]*24\s*months",
-        r"from\s*1\s*year",
-        r"from\s*12\s*months",
         r"12\s*months",
         r"18\s*months",
-        r"1\s*year",
+        r"1\s*year"  # only here because ≤2 years is still infant
     ]
 
+    # Patterns for "Likely to include infants"
     likely_include_patterns = [
         r"from\s*0",
         r"from\s*6\s*months",
-        r"from\s*1\s*year",
-        r"from\s*12\s*months",
-        r"up to.*",  # any phrase that starts with "up to"
+        r"from\s*(1|12)\s*months",
+        r"up to.*",  # phrases starting with 'up to' are likely
         r"starting at\s*(0|6|12|18)\s*(months|years?)"
     ]
+
+    # Detect minimum ages that indicate age 2 years or above
+    min_age_over_2_years = False
+    min_age_match = re.search(r"from\s*(\d+)\s*(months|years?)", text_lower)
+    if min_age_match:
+        age_num = int(min_age_match.group(1))
+        age_unit = min_age_match.group(2)
+        if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
+            min_age_over_2_years = True
 
     # Precedence:
     # 1. Check "Include infants"
     for pat in include_patterns:
         if re.search(pat, text_lower):
+            # If minimum age is >= 2 years, downgrade to Unlikely (except if pattern clearly says less than)
+            if min_age_over_2_years and not re.search(r"(less than|<)", text_lower):
+                return "Unlikely to include infants but possible"
             return "Include infants"
 
     # 2. Check "Likely to include infants" (only if no include match)
     for pat in likely_include_patterns:
         if re.search(pat, text_lower):
+            if min_age_over_2_years:
+                return "Unlikely to include infants but possible"
             return "Likely to include infants"
 
     # 3. Check "Does not include infants"
-    # If no matches above and text explicitly states no infants or no relevant ages
-    if ("no infants" in text_lower or "does not include infants" in text_lower):
+    if "no infants" in text_lower or "does not include infants" in text_lower:
         return "Does not include infants"
 
     # 4. Check "Unlikely to include infants but possible"
-    # Minimum age exactly 2 years or 24 months in onset mapping or text
-    if re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
+    if min_age_over_2_years or re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
         return "Unlikely to include infants but possible"
     if re.search(r"\b2\s*years?\b", text_lower) or re.search(r"\b24\s*months\b", text_lower):
         return "Unlikely to include infants but possible"
@@ -88,7 +98,6 @@ def assess_infant_inclusion(text, condition):
     if not text_lower.strip() and not onset.strip():
         return "Uncertain"
 
-    # Default fallback if no category matched
     return "Uncertain"
 
 # -------------------------------
@@ -169,21 +178,17 @@ def assess_cgt_relevance_and_links(text, condition):
     links = []
     condition_lower = condition.lower()
 
-    # First, check mapping
     relevance = cgt_map.get(condition_lower, None)
     found_study = False
 
-    # Always try ClinicalTrials.gov
     studies = check_clinicaltrials_gov(condition)
     if studies:
         found_study = True
         links.extend(studies)
 
-    # If mapped as Relevant or Likely Relevant and study found
     if relevance in ["Relevant", "Likely Relevant"] and found_study:
         return relevance, links
 
-    # If mapping not found or no studies returned, fallback to keyword detection
     cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
                     "gene editing", "gene correction", "gene silencing", "reprogramming",
                     "cgt", "c&gt", "car-t therapy"]
@@ -194,7 +199,6 @@ def assess_cgt_relevance_and_links(text, condition):
     else:
         relevance = "Unsure"
 
-    # Always add Google search suggestion
     google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
 
     links.append({
@@ -206,7 +210,6 @@ def assess_cgt_relevance_and_links(text, condition):
         "locations": []
     })
 
-    # Always add PubMed fallback
     pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
 
     links.append({
@@ -331,4 +334,3 @@ if uploaded_file:
             df.to_excel(output, index=False, engine='openpyxl')
             output.seek(0)
             st.download_button("⬇️ Download File", output, file_name="updated_registry_review.xlsx")
-
