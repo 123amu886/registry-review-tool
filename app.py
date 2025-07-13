@@ -9,7 +9,7 @@ import json
 # Page setup
 # -------------------------------
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Robust)")
+st.title("🧾 Clinical Registry Review Tool (Merged Final)")
 
 # -------------------------------
 # Load mapping files
@@ -28,41 +28,37 @@ fda_map = load_fda_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# Infant inclusion function
+# Infant inclusion function (merged July 1st + refined logic)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
 
     include_patterns = [
         r"from\s*0", r"starting at birth", r"newborn", r"infants?",
-        r"less than\s*(12|18|24)\s*months", r"<\s*(12|18|24)\s*months",
-        r"<\s*(1|2)\s*years?", r"up to\s*18\s*months", r"up to\s*2\s*years",
-        r"0[-\s]*2\s*years", r"0[-\s]*24\s*months", r"from\s*1\s*year",
+        r"less than\s*(12|18|24)\s*months?", r"<\s*(12|18|24)\s*months?",
+        r"<\s*(1|2)\s*years?", r"up to\s*18\s*months?", r"up to\s*2\s*years?",
+        r"0[-\s]*2\s*years?", r"0[-\s]*24\s*months?", r"from\s*1\s*year",
         r"from\s*12\s*months", r">\s*12\s*months", r">\s*18\s*months", r">\s*1\s*year"
+    ]
+
+    likely_patterns = [
+        r"from\s*0", r"from\s*6\s*months", r"from\s*1\s*year",
+        r"from\s*12\s*months", r"up to"
     ]
 
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
 
-    if any(phrase in text_lower for phrase in ["from 0", "from 6 months", "from 1 year", "from 12 months", "up to"]):
-        return "Likely to include infants"
+    for pattern in likely_patterns:
+        if re.search(pattern, text_lower):
+            return "Likely to include infants"
 
-    age_months_match = re.search(r"(\d+)\s*(month|months)", text_lower)
-    if age_months_match:
-        min_age_months = int(age_months_match.group(1))
-        if min_age_months == 24:
-            return "Unlikely to include infants but possible"
-        elif min_age_months > 24:
-            return "Does not include infants"
+    if re.search(r"(2\s*years?|24\s*months?)", text_lower):
+        return "Unlikely to include infants but possible"
 
-    age_years_match = re.search(r"(\d+)\s*(year|years)", text_lower)
-    if age_years_match:
-        min_age_years = int(age_years_match.group(1))
-        if min_age_years == 2:
-            return "Unlikely to include infants but possible"
-        elif min_age_years >= 3:
-            return "Does not include infants"
+    if re.search(r"(from|starting at|minimum age)\s*(3|4|5|\d{2,})\s*(years?)", text_lower):
+        return "Does not include infants"
 
     onset = age_map.get(condition.lower(), "").lower()
     if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
@@ -73,7 +69,7 @@ def assess_infant_inclusion(text, condition):
     return "Uncertain"
 
 # -------------------------------
-# CGT relevance function with robust filtering
+# CGT relevance function (FDA, Phase III, filtered PubMed, override)
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
@@ -141,7 +137,6 @@ def assess_cgt_relevance_and_links(text, condition):
             title = article.select_one('.docsum-title').get_text(strip=True)
             link = "https://pubmed.ncbi.nlm.nih.gov" + article.select_one('.docsum-title')['href']
 
-            # Only include titles with translational relevance
             if any(kw in title.lower() for kw in ["preclinical", "animal model", "gene therapy", "vector", "in vivo", "functional rescue", "treatment"]):
                 links.append({"title": title, "link": link})
 
