@@ -26,75 +26,66 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (Improved handling of age thresholds)
+# 2. Infant inclusion logic (with improved age detection and word boundaries)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
     condition_lower = condition.lower()
     onset = age_map.get(condition_lower, "").lower()
 
-    # Patterns explicitly for "Include infants" (strictly max 2 years, no generic 'from 1 year' here)
     include_patterns = [
-        r"from\s*0",
+        r"from\s*0\b",
         r"starting at birth",
-        r"newborn",
-        r"infants?",
+        r"\bnewborn\b",
+        r"\binfants?\b",
         r"less than\s*(12|18|24)\s*months",
         r"<\s*(12|18|24)\s*months",
-        r"<\s*(1|2)\s*years?",
-        r"up to\s*(18|2\s*years?)",
-        r"0[-\s]*2\s*years",
-        r"0[-\s]*24\s*months",
-        r"12\s*months",
-        r"18\s*months",
-        r"1\s*year"  # only here because ≤2 years is still infant
+        r"<\s*(1|2)\s*years?\b",
+        r"up to\s*(18|2\s*years?)\b",
+        r"0[-\s]*2\s*years\b",
+        r"0[-\s]*24\s*months\b",
+        r"\b12\s*months\b",
+        r"\b18\s*months\b",
+        r"\b1\s*year\b"
     ]
 
-    # Patterns for "Likely to include infants"
     likely_include_patterns = [
-        r"from\s*0",
-        r"from\s*6\s*months",
-        r"from\s*(1|12)\s*months",
-        r"up to.*",  # phrases starting with 'up to' are likely
-        r"starting at\s*(0|6|12|18)\s*(months|years?)"
+        r"from\s*0\b",
+        r"from\s*6\s*months\b",
+        r"from\s*(1|12)\s*months\b",
+        r"up to\b.*",
+        r"starting at\s*(0|6|12|18)\s*(months|years?)\b"
     ]
 
-    # Detect minimum ages that indicate age 2 years or above
+    # Detect any age ≥ 2 years anywhere in the text (not just "from ...")
     min_age_over_2_years = False
-    min_age_match = re.search(r"from\s*(\d+)\s*(months|years?)", text_lower)
-    if min_age_match:
-        age_num = int(min_age_match.group(1))
-        age_unit = min_age_match.group(2)
+    age_matches = re.findall(r"\b(\d+)\s*(months|years?)\b", text_lower)
+    for age_num_str, age_unit in age_matches:
+        age_num = int(age_num_str)
         if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
             min_age_over_2_years = True
+            break
 
     # Precedence:
-    # 1. Check "Include infants"
     for pat in include_patterns:
         if re.search(pat, text_lower):
-            # If minimum age is >= 2 years, downgrade to Unlikely (except if pattern clearly says less than)
+            # Override if large age mentioned and no explicit 'less than' or '<'
             if min_age_over_2_years and not re.search(r"(less than|<)", text_lower):
                 return "Unlikely to include infants but possible"
             return "Include infants"
 
-    # 2. Check "Likely to include infants" (only if no include match)
     for pat in likely_include_patterns:
         if re.search(pat, text_lower):
             if min_age_over_2_years:
                 return "Unlikely to include infants but possible"
             return "Likely to include infants"
 
-    # 3. Check "Does not include infants"
     if "no infants" in text_lower or "does not include infants" in text_lower:
         return "Does not include infants"
 
-    # 4. Check "Unlikely to include infants but possible"
     if min_age_over_2_years or re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
         return "Unlikely to include infants but possible"
-    if re.search(r"\b2\s*years?\b", text_lower) or re.search(r"\b24\s*months\b", text_lower):
-        return "Unlikely to include infants but possible"
 
-    # 5. "Uncertain" if no age info or can't classify definitively
     if not text_lower.strip() and not onset.strip():
         return "Uncertain"
 
