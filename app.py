@@ -6,7 +6,7 @@ import re
 import json
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
+st.title("🧾 Clinical Registry Review Tool (Final Updated)")
 
 # -------------------------------
 # 1. Load JSON mapping files
@@ -25,10 +25,20 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic
+# 2. Infant inclusion logic with numeric extraction
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
+
+    # Extract numeric minimum ages
+    age_matches = re.findall(r"(\d+)\s*(month|year)", text_lower)
+    min_age_months = None
+    if age_matches:
+        for age, unit in age_matches:
+            age = int(age)
+            age_in_months = age if unit.startswith("month") else age * 12
+            if min_age_months is None or age_in_months < min_age_months:
+                min_age_months = age_in_months
 
     # Patterns for "Include infants"
     include_patterns = [
@@ -50,6 +60,9 @@ def assess_infant_inclusion(text, condition):
         r"1\s*year"
     ]
 
+    if any(re.search(p, text_lower) for p in include_patterns):
+        return "Include infants"
+
     # Patterns for "Likely to include infants"
     likely_patterns = [
         r"from\s*0",
@@ -59,27 +72,46 @@ def assess_infant_inclusion(text, condition):
         r"(up to.*months|up to.*years)"
     ]
 
-    # Check "Include infants" first
-    if any(re.search(p, text_lower) for p in include_patterns):
-        return "Include infants"
-
-    # Then check "Likely to include infants"
     if any(re.search(p, text_lower) for p in likely_patterns):
         return "Likely to include infants"
 
-    # Check "Does not include infants" if exclusion phrases exist
+    # Explicit exclusion
     if re.search(r"(no infants|excluding infants)", text_lower):
         return "Does not include infants"
 
-    # Check "Unlikely to include infants but possible" if min age exactly 2 years or 24 months
-    if re.search(r"(2\s*years|24\s*months)", text_lower):
-        return "Unlikely to include infants but possible"
+    # Numeric-based classification
+    if min_age_months is not None:
+        if min_age_months >= 24:
+            if min_age_months == 24:
+                return "Unlikely to include infants but possible"
+            else:
+                return "Does not include infants"
 
     # Fallback
     return "Uncertain"
 
 # -------------------------------
-# 3. ClinicalTrials.gov API check (gene/cell therapy existence)
+# 3. CGT relevance logic with mapping and keyword parsing
+# -------------------------------
+def assess_cgt_relevance(condition, text):
+    condition_lower = condition.lower()
+    relevance = cgt_map.get(condition_lower, None)
+
+    # If mapping states Relevant or Likely Relevant
+    if relevance in ["Relevant", "Likely Relevant"]:
+        return relevance
+
+    # Keyword detection in text
+    cgt_keywords = ["gene therapy", "cell therapy", "crispr", "car-t", "gene replacement"]
+    text_lower = text.lower() if pd.notna(text) else ""
+
+    if any(k in text_lower for k in cgt_keywords):
+        return "Likely Relevant"
+
+    return "Unsure"
+
+# -------------------------------
+# 4. ClinicalTrials.gov and external links check
 # -------------------------------
 def check_gene_cell_therapy(condition):
     links = []
@@ -127,7 +159,7 @@ def check_gene_cell_therapy(condition):
     return links
 
 # -------------------------------
-# 4. Contact email scraper
+# 5. Contact email scraper
 # -------------------------------
 def extract_email(url):
     try:
@@ -143,7 +175,7 @@ def extract_email(url):
         return ""
 
 # -------------------------------
-# 5. Streamlit app flow
+# 6. Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
@@ -184,9 +216,13 @@ if uploaded_file:
         suggested_infant = assess_infant_inclusion(study_texts, condition)
         st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
 
+        # CGT relevance logic
+        suggested_cgt = assess_cgt_relevance(condition, study_texts)
+        st.caption(f"🧬 Suggested CGT Relevance: **{suggested_cgt}**")
+
         # Gene/cell therapy existence check
         therapy_links = check_gene_cell_therapy(condition)
-        st.caption("🧬 **Does gene or cell therapy exist for this condition?**")
+        st.markdown("🔗 **Gene/Cell Therapy Existence Links:**")
         for l in therapy_links:
             st.markdown(f"- [{l['title']}]({l['link']})")
 
@@ -215,7 +251,7 @@ if uploaded_file:
             original_index = df_filtered.index[record_index]
             df.at[original_index, "contact information"] = email
             df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
-            df.at[original_index, "Relevance to C&GT"] = cg_choice
+            df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
             df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
             st.session_state.df = df
             st.success("✅ Saved!")
