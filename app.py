@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import json
+from io import BytesIO
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
 st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
@@ -25,12 +26,14 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic
+# 2. Infant inclusion logic (Updated)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
+    condition_lower = condition.lower()
+    onset = age_map.get(condition_lower, "").lower()
 
-    # Patterns for "Include infants"
+    # Helper regex patterns
     include_patterns = [
         r"from\s*0",
         r"starting at birth",
@@ -39,109 +42,186 @@ def assess_infant_inclusion(text, condition):
         r"less than\s*(12|18|24)\s*months",
         r"<\s*(12|18|24)\s*months",
         r"<\s*(1|2)\s*years?",
-        r"up to\s*18\s*months",
-        r"up to\s*2\s*years",
+        r"up to\s*(18|2\s*years?)",
         r"0[-\s]*2\s*years",
         r"0[-\s]*24\s*months",
         r"from\s*1\s*year",
         r"from\s*12\s*months",
-        r">\s*12\s*months",
-        r">\s*18\s*months",
-        r">\s*1\s*year"
+        r"12\s*months",
+        r"18\s*months",
+        r"1\s*year",
     ]
 
-    # Patterns for "Likely to include infants"
-    likely_patterns = [
+    likely_include_patterns = [
         r"from\s*0",
         r"from\s*6\s*months",
         r"from\s*1\s*year",
         r"from\s*12\s*months",
-        r"(from\s*(0|6|12|18)\s*months.*up to)",
-        r"(from\s*1\s*year.*up to)"
+        r"up to.*",  # any phrase that starts with "up to"
+        r"starting at\s*(0|6|12|18)\s*(months|years?)"
     ]
 
-    # Check "Include infants" first
-    if any(re.search(p, text_lower) for p in include_patterns):
-        return "Include infants"
+    # Precedence:
+    # 1. Check "Include infants"
+    for pat in include_patterns:
+        if re.search(pat, text_lower):
+            return "Include infants"
 
-    # Then check "Likely to include infants"
-    if any(re.search(p, text_lower) for p in likely_patterns):
-        return "Likely to include infants"
+    # 2. Check "Likely to include infants" (only if no include match)
+    for pat in likely_include_patterns:
+        if re.search(pat, text_lower):
+            return "Likely to include infants"
 
-    # Check "Unlikely to include infants but possible" if min age exactly 2 years or 24 months
-    if re.search(r"(2\s*years|24\s*months)", text_lower):
-        return "Unlikely to include infants but possible"
-
-    # Check "Does not include infants" if minimum age ≥ 2 years
-    if re.search(r"(minimum age\s*[:\s]*[2-9]\s*years?)", text_lower):
+    # 3. Check "Does not include infants"
+    # If no matches above and text explicitly states no infants or no relevant ages
+    if ("no infants" in text_lower or "does not include infants" in text_lower):
         return "Does not include infants"
 
-    # Fallback
+    # 4. Check "Unlikely to include infants but possible"
+    # Minimum age exactly 2 years or 24 months in onset mapping or text
+    if re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
+        return "Unlikely to include infants but possible"
+    if re.search(r"\b2\s*years?\b", text_lower) or re.search(r"\b24\s*months\b", text_lower):
+        return "Unlikely to include infants but possible"
+
+    # 5. "Uncertain" if no age info or can't classify definitively
+    if not text_lower.strip() and not onset.strip():
+        return "Uncertain"
+
+    # Default fallback if no category matched
     return "Uncertain"
 
 # -------------------------------
-# 3. FDA approval check (mock using mapping for now)
+# 3. ClinicalTrials.gov API with contacts and locations
 # -------------------------------
-def fda_approved(condition):
-    condition_lower = condition.lower()
-    approval = cgt_map.get(condition_lower, {}).get("fda_approved", False)
-    return approval
-
-# -------------------------------
-# 4. ClinicalTrials.gov API active trial check
-# -------------------------------
-def clinical_trials_gov_active(condition):
+def check_clinicaltrials_gov(condition):
     try:
         search_url = "https://clinicaltrials.gov/api/query/study_fields"
         search_params = {
             "expr": f"{condition} gene therapy",
-            "fields": "NCTId,OverallStatus",
+            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
             "min_rnk": 1,
-            "max_rnk": 5,
+            "max_rnk": 3,
             "fmt": "json"
         }
-        r = requests.get(search_url, params=search_params, timeout=10)
-        data = r.json()
-        studies = data['StudyFieldsResponse']['StudyFields']
+        search_r = requests.get(search_url, params=search_params, timeout=10)
+        search_data = search_r.json()
+        studies = search_data['StudyFieldsResponse']['StudyFields']
+        study_info = []
+
         for s in studies:
-            status = s.get("OverallStatus", [""])[0].lower()
-            if "recruiting" in status or "active" in status or "enrolling" in status:
-                return True
-        return False
+            nct_id = s["NCTId"][0]
+            title = s["BriefTitle"][0]
+            phase = s.get("Phase", ["N/A"])[0]
+            status = s.get("OverallStatus", ["N/A"])[0]
+            ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
+
+            detail_url = "https://clinicaltrials.gov/api/query/full_studies"
+            detail_params = {"expr": nct_id, "fmt": "json"}
+            detail_r = requests.get(detail_url, params=detail_params, timeout=10)
+            detail_data = detail_r.json()
+
+            contacts = []
+            locations = []
+
+            try:
+                full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
+                protocol_section = full_study.get('ProtocolSection', {})
+                contacts_module = protocol_section.get('ContactsLocationsModule', {})
+
+                overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
+                for contact in overall_officials:
+                    name = contact.get('LastName', 'N/A')
+                    role = contact.get('Role', 'N/A')
+                    contacts.append(f"{name} ({role})")
+
+                location_list = contacts_module.get('LocationList', {}).get('Location', [])
+                for loc in location_list:
+                    facility = loc.get('LocationFacility', 'N/A')
+                    city = loc.get('LocationCity', 'N/A')
+                    country = loc.get('LocationCountry', 'N/A')
+                    locations.append(f"{facility}, {city}, {country}")
+
+            except Exception as e:
+                print(f"⚠️ Detail parsing error for {nct_id}: {e}")
+                contacts = ["No contact data found."]
+                locations = ["No location data found."]
+
+            study_info.append({
+                "title": title,
+                "link": ct_link,
+                "phase": phase,
+                "status": status,
+                "contacts": contacts,
+                "locations": locations
+            })
+
+        return study_info
+
     except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov error: {e}")
-        return False
+        print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
+        return []
 
 # -------------------------------
-# 5. PubMed/Google preclinical fallback check
+# 4. Improved CGT relevance logic with Google and PubMed links
 # -------------------------------
-def pubmed_or_google_preclinical(condition):
-    keywords = ["gene therapy", "crispr therapy", "gene replacement therapy"]
-    for k in keywords:
-        google_query = f"https://www.google.com/search?q={condition.replace(' ','+')}+{k.replace(' ','+')}"
-        try:
-            r = requests.get(google_query, timeout=8)
-            if "gene therapy" in r.text.lower() or "crispr" in r.text.lower():
-                return True
-        except Exception as e:
-            print(f"⚠️ Google search error: {e}")
-    return False
+def assess_cgt_relevance_and_links(text, condition):
+    links = []
+    condition_lower = condition.lower()
 
-# -------------------------------
-# 6. Assess CGT relevance logic
-# -------------------------------
-def assess_cgt_relevance(condition):
-    if fda_approved(condition):
-        return "Relevant"
-    elif clinical_trials_gov_active(condition):
-        return "Likely Relevant"
-    elif pubmed_or_google_preclinical(condition):
-        return "Likely Relevant"
+    # First, check mapping
+    relevance = cgt_map.get(condition_lower, None)
+    found_study = False
+
+    # Always try ClinicalTrials.gov
+    studies = check_clinicaltrials_gov(condition)
+    if studies:
+        found_study = True
+        links.extend(studies)
+
+    # If mapped as Relevant or Likely Relevant and study found
+    if relevance in ["Relevant", "Likely Relevant"] and found_study:
+        return relevance, links
+
+    # If mapping not found or no studies returned, fallback to keyword detection
+    cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
+                    "gene editing", "gene correction", "gene silencing", "reprogramming",
+                    "cgt", "c&gt", "car-t therapy"]
+    text_lower = text.lower() if pd.notna(text) else ""
+
+    if any(k in text_lower for k in cgt_keywords):
+        relevance = "Likely Relevant"
     else:
-        return "Unsure"
+        relevance = "Unsure"
+
+    # Always add Google search suggestion
+    google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
+
+    links.append({
+        "title": "Google Search: Is there a gene therapy for this condition?",
+        "link": google_query,
+        "phase": "N/A",
+        "status": "N/A",
+        "contacts": [],
+        "locations": []
+    })
+
+    # Always add PubMed fallback
+    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
+
+    links.append({
+        "title": "PubMed Search",
+        "link": pubmed_url,
+        "phase": "N/A",
+        "status": "N/A",
+        "contacts": [],
+        "locations": []
+    })
+
+    return relevance, links
 
 # -------------------------------
-# 7. Contact email scraper
+# 5. Contact email scraper
 # -------------------------------
 def extract_email(url):
     try:
@@ -150,14 +230,14 @@ def extract_email(url):
         mail = soup.select_one("a[href^=mailto]")
         if mail:
             return mail['href'].replace('mailto:', '')
-        matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
+        matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,10}", soup.get_text())
         return matches[0] if matches else ""
     except Exception as e:
         print(f"⚠️ Email extraction error: {e}")
         return ""
 
 # -------------------------------
-# 8. Streamlit app flow
+# 6. Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
@@ -169,7 +249,10 @@ if uploaded_file:
         df = st.session_state.df
 
     reviewer_name = st.text_input("Your name (Column F)", "")
-    df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
+    if reviewer_name.strip():
+        df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
+    else:
+        df_filtered = df.copy()
 
     show_incomplete = st.checkbox("Show only incomplete rows", value=True)
     if show_incomplete:
@@ -195,28 +278,41 @@ if uploaded_file:
         ])
 
         suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested: **{suggested_infant}**")
+        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
 
-        suggested_cgt = assess_cgt_relevance(condition)
-        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
+        suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
+        st.caption(f"🧬 Suggested CGT Relevance: **{suggested_cgt}**")
+
+        if study_links:
+            st.markdown("🔗 **Related Studies & Database Links:**")
+            for s in study_links:
+                st.markdown(f"- **{s['title']}** (Phase: {s['phase']}, Status: {s['status']}) [View Study]({s['link']})")
+                if s['contacts']:
+                    st.markdown(f"  **Contacts:** {', '.join(s['contacts'])}")
+                if s['locations']:
+                    st.markdown(f"  **Locations:** {', '.join(s['locations'])}")
 
         email = st.text_input("Contact email", extract_email(record["Web site"]))
 
-        pop_choice = st.radio("Infant Population", [
+        pop_choices = [
             "Include infants",
             "Likely to include infants",
             "Unlikely to include infants but possible",
             "Does not include infants",
             "Uncertain"
-        ], index=0)
+        ]
+        pop_index = pop_choices.index(suggested_infant) if suggested_infant in pop_choices else 4
+        pop_choice = st.radio("Infant Population", pop_choices, index=pop_index)
 
-        cg_choice = st.radio("Cell/Gene Therapy Relevance", [
+        cg_choices = [
             "Relevant",
             "Likely Relevant",
             "Unlikely Relevant",
             "Not Relevant",
             "Unsure"
-        ], index=0)
+        ]
+        cg_index = cg_choices.index(suggested_cgt) if suggested_cgt in cg_choices else 4
+        cg_choice = st.radio("Cell/Gene Therapy Relevance", cg_choices, index=cg_index)
 
         comments = st.text_area("Reviewer Comments", value=record.get(
             "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
@@ -231,7 +327,8 @@ if uploaded_file:
             st.success("✅ Saved!")
 
         if st.button("⬇️ Export Updated Excel"):
-            from io import BytesIO
             output = BytesIO()
             df.to_excel(output, index=False, engine='openpyxl')
+            output.seek(0)
             st.download_button("⬇️ Download File", output, file_name="updated_registry_review.xlsx")
+
