@@ -26,12 +26,16 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (with improved age detection and word boundaries)
+# 2. Infant inclusion logic (with debug and improved regex)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
     condition_lower = condition.lower()
     onset = age_map.get(condition_lower, "").lower()
+
+    # Debug info
+    print(f"DEBUG: Assessing infant inclusion for condition: {condition}")
+    print(f"DEBUG: Text: {text_lower}")
 
     include_patterns = [
         r"from\s*0\b",
@@ -46,7 +50,7 @@ def assess_infant_inclusion(text, condition):
         r"0[-\s]*24\s*months\b",
         r"\b12\s*months\b",
         r"\b18\s*months\b",
-        r"\b1\s*year\b"
+        r"(?<!\d)1\s*year(?!\d)",
     ]
 
     likely_include_patterns = [
@@ -57,38 +61,48 @@ def assess_infant_inclusion(text, condition):
         r"starting at\s*(0|6|12|18)\s*(months|years?)\b"
     ]
 
-    # Detect any age ≥ 2 years anywhere in the text (not just "from ...")
+    # Detect any age >= 2 years anywhere
     min_age_over_2_years = False
     age_matches = re.findall(r"\b(\d+)\s*(months|years?)\b", text_lower)
     for age_num_str, age_unit in age_matches:
         age_num = int(age_num_str)
+        print(f"DEBUG: Found age {age_num} {age_unit}")
         if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
             min_age_over_2_years = True
             break
 
-    # Precedence:
+    # If big age anywhere, return 'Unlikely' immediately
+    if min_age_over_2_years:
+        print("DEBUG: Age >= 2 years found, returning 'Unlikely to include infants but possible'")
+        return "Unlikely to include infants but possible"
+
+    # Now check Include infants patterns
     for pat in include_patterns:
         if re.search(pat, text_lower):
-            # Override if large age mentioned and no explicit 'less than' or '<'
-            if min_age_over_2_years and not re.search(r"(less than|<)", text_lower):
-                return "Unlikely to include infants but possible"
+            print(f"DEBUG: Include infants matched pattern: {pat}")
             return "Include infants"
 
+    # Then Likely to include
     for pat in likely_include_patterns:
         if re.search(pat, text_lower):
-            if min_age_over_2_years:
-                return "Unlikely to include infants but possible"
+            print(f"DEBUG: Likely to include infants matched pattern: {pat}")
             return "Likely to include infants"
 
+    # Explicit excludes
     if "no infants" in text_lower or "does not include infants" in text_lower:
+        print("DEBUG: Explicit exclusion found")
         return "Does not include infants"
 
-    if min_age_over_2_years or re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
+    # Check onset info for large age
+    if re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
+        print("DEBUG: Onset info indicates >= 2 years")
         return "Unlikely to include infants but possible"
 
     if not text_lower.strip() and not onset.strip():
+        print("DEBUG: No info available, returning Uncertain")
         return "Uncertain"
 
+    print("DEBUG: Returning Uncertain by default")
     return "Uncertain"
 
 # -------------------------------
@@ -322,6 +336,6 @@ if uploaded_file:
 
         if st.button("⬇️ Export Updated Excel"):
             output = BytesIO()
-            df.to_excel(output, index=False, engine='openpyxl')
+            df.to_excel(output, index=False, engine="openpyxl")
             output.seek(0)
             st.download_button("⬇️ Download File", output, file_name="updated_registry_review.xlsx")
