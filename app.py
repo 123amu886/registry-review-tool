@@ -4,7 +4,6 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import json
-from io import BytesIO
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
 st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
@@ -26,7 +25,7 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (strict order, debug, fixed regex)
+# 2. Infant inclusion logic (final corrected version)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
@@ -36,28 +35,27 @@ def assess_infant_inclusion(text, condition):
     print(f"DEBUG: Assessing infant inclusion for condition: {condition}")
     print(f"DEBUG: Text: {text_lower}")
 
-    # First, detect any age >= 2 years or 24 months (priority check)
-    age_matches = re.findall(r"\b(\d+)\s*(months|years?)\b", text_lower)
-    for age_num_str, age_unit in age_matches:
-        age_num = int(age_num_str)
-        if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
-            print(f"DEBUG: Found age {age_num} {age_unit} >= 2 years threshold")
-            return "Unlikely to include infants but possible"
+    # 1. Explicit exclusion first
+    if "no infants" in text_lower or "does not include infants" in text_lower:
+        print("DEBUG: Explicit exclusion found")
+        return "Does not include infants"
 
+    # 2. INCLUDE INFANTS patterns
     include_patterns = [
-        r"from\s*0\b",
+        r"\bfrom\s*0\b",
         r"starting at birth",
         r"\bnewborn\b",
         r"\binfants?\b",
         r"less than\s*(12|18|24)\s*months",
         r"<\s*(12|18|24)\s*months",
         r"<\s*(1|2)\s*years?\b",
-        r"up to\s*(18|2\s*years?)\b",
-        r"0[-\s]*2\s*years\b",
-        r"0[-\s]*24\s*months\b",
+        r"up to\s*(18|24)\s*months",
+        r"up to\s*2\s*years",
+        r"0[-\s]*2\s*years",
+        r"0[-\s]*24\s*months",
         r"\b12\s*months\b",
         r"\b18\s*months\b",
-        r"(?<!\d)1\s*year(?!\d)",
+        r"(?<!\d)1\s*year(?!\d)"
     ]
 
     for pat in include_patterns:
@@ -65,32 +63,30 @@ def assess_infant_inclusion(text, condition):
             print(f"DEBUG: Include infants matched pattern: {pat}")
             return "Include infants"
 
-    likely_include_patterns = [
-        r"from\s*0\b",
-        r"from\s*6\s*months\b",
-        r"from\s*(1|12)\s*months\b",
-        r"up to\b.*",
-        r"starting at\s*(0|6|12|18)\s*(months|years?)\b"
-    ]
+    # 3. LIKELY TO INCLUDE INFANTS: "up to" any age (even beyond 2 years)
+    if re.search(r"up to\s*\d+\s*(months|years?)", text_lower):
+        print("DEBUG: 'Up to' found, Likely to include infants")
+        return "Likely to include infants"
 
-    for pat in likely_include_patterns:
-        if re.search(pat, text_lower):
-            print(f"DEBUG: Likely to include infants matched pattern: {pat}")
-            return "Likely to include infants"
+    # 4. MINIMUM AGE ≥ 2 years or 24 months → Unlikely to include infants but possible
+    age_matches = re.findall(r"\b(\d+)\s*(months|years?)\b", text_lower)
+    for age_num_str, age_unit in age_matches:
+        age_num = int(age_num_str)
+        if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
+            print(f"DEBUG: Found minimum age {age_num} {age_unit} >= 2 years threshold")
+            return "Unlikely to include infants but possible"
 
-    if "no infants" in text_lower or "does not include infants" in text_lower:
-        print("DEBUG: Explicit exclusion found")
-        return "Does not include infants"
+    # 5. Onset mapping fallback
+    if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
+        print("DEBUG: Onset mapping indicates Include infants")
+        return "Include infants"
 
     if re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
-        print("DEBUG: Onset info indicates >= 2 years")
+        print("DEBUG: Onset mapping indicates >= 2 years")
         return "Unlikely to include infants but possible"
 
-    if not text_lower.strip() and not onset.strip():
-        print("DEBUG: No info available, returning Uncertain")
-        return "Uncertain"
-
-    print("DEBUG: Returning Uncertain by default")
+    # 6. Default
+    print("DEBUG: No clear match, returning Uncertain")
     return "Uncertain"
 
 # -------------------------------
@@ -118,44 +114,14 @@ def check_clinicaltrials_gov(condition):
             status = s.get("OverallStatus", ["N/A"])[0]
             ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
 
-            detail_url = "https://clinicaltrials.gov/api/query/full_studies"
-            detail_params = {"expr": nct_id, "fmt": "json"}
-            detail_r = requests.get(detail_url, params=detail_params, timeout=10)
-            detail_data = detail_r.json()
-
-            contacts = []
-            locations = []
-
-            try:
-                full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
-                protocol_section = full_study.get('ProtocolSection', {})
-                contacts_module = protocol_section.get('ContactsLocationsModule', {})
-
-                overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
-                for contact in overall_officials:
-                    name = contact.get('LastName', 'N/A')
-                    role = contact.get('Role', 'N/A')
-                    contacts.append(f"{name} ({role})")
-
-                location_list = contacts_module.get('LocationList', {}).get('Location', [])
-                for loc in location_list:
-                    facility = loc.get('LocationFacility', 'N/A')
-                    city = loc.get('LocationCity', 'N/A')
-                    country = loc.get('LocationCountry', 'N/A')
-                    locations.append(f"{facility}, {city}, {country}")
-
-            except Exception as e:
-                print(f"⚠️ Detail parsing error for {nct_id}: {e}")
-                contacts = ["No contact data found."]
-                locations = ["No location data found."]
-
             study_info.append({
+                "nct_id": nct_id,
                 "title": title,
-                "link": ct_link,
                 "phase": phase,
                 "status": status,
-                "contacts": contacts,
-                "locations": locations
+                "link": ct_link,
+                "contacts": [],
+                "locations": []
             })
 
         return study_info
@@ -165,21 +131,18 @@ def check_clinicaltrials_gov(condition):
         return []
 
 # -------------------------------
-# 4. Improved CGT relevance logic with Google and PubMed links
+# 4. CGT relevance logic
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
     condition_lower = condition.lower()
 
     relevance = cgt_map.get(condition_lower, None)
-    found_study = False
-
     studies = check_clinicaltrials_gov(condition)
     if studies:
-        found_study = True
         links.extend(studies)
 
-    if relevance in ["Relevant", "Likely Relevant"] and found_study:
+    if relevance in ["Relevant", "Likely Relevant"] and studies:
         return relevance, links
 
     cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
@@ -193,7 +156,6 @@ def assess_cgt_relevance_and_links(text, condition):
         relevance = "Unsure"
 
     google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
-
     links.append({
         "title": "Google Search: Is there a gene therapy for this condition?",
         "link": google_query,
@@ -204,7 +166,6 @@ def assess_cgt_relevance_and_links(text, condition):
     })
 
     pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
-
     links.append({
         "title": "PubMed Search",
         "link": pubmed_url,
@@ -226,7 +187,7 @@ def extract_email(url):
         mail = soup.select_one("a[href^=mailto]")
         if mail:
             return mail['href'].replace('mailto:', '')
-        matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,10}", soup.get_text())
+        matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
         return matches[0] if matches else ""
     except Exception as e:
         print(f"⚠️ Email extraction error: {e}")
@@ -245,10 +206,7 @@ if uploaded_file:
         df = st.session_state.df
 
     reviewer_name = st.text_input("Your name (Column F)", "")
-    if reviewer_name.strip():
-        df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
-    else:
-        df_filtered = df.copy()
+    df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
 
     show_incomplete = st.checkbox("Show only incomplete rows", value=True)
     if show_incomplete:
@@ -274,10 +232,10 @@ if uploaded_file:
         ])
 
         suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
+        st.caption(f"🧒 Suggested: **{suggested_infant}**")
 
         suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
-        st.caption(f"🧬 Suggested CGT Relevance: **{suggested_cgt}**")
+        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
 
         if study_links:
             st.markdown("🔗 **Related Studies & Database Links:**")
@@ -290,25 +248,21 @@ if uploaded_file:
 
         email = st.text_input("Contact email", extract_email(record["Web site"]))
 
-        pop_choices = [
+        pop_choice = st.radio("Infant Population", [
             "Include infants",
             "Likely to include infants",
             "Unlikely to include infants but possible",
             "Does not include infants",
             "Uncertain"
-        ]
-        pop_index = pop_choices.index(suggested_infant) if suggested_infant in pop_choices else 4
-        pop_choice = st.radio("Infant Population", pop_choices, index=pop_index)
+        ], index=0)
 
-        cg_choices = [
+        cg_choice = st.radio("Cell/Gene Therapy Relevance", [
             "Relevant",
             "Likely Relevant",
             "Unlikely Relevant",
             "Not Relevant",
             "Unsure"
-        ]
-        cg_index = cg_choices.index(suggested_cgt) if suggested_cgt in cg_choices else 4
-        cg_choice = st.radio("Cell/Gene Therapy Relevance", cg_choices, index=cg_index)
+        ], index=0)
 
         comments = st.text_area("Reviewer Comments", value=record.get(
             "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
@@ -323,7 +277,6 @@ if uploaded_file:
             st.success("✅ Saved!")
 
         if st.button("⬇️ Export Updated Excel"):
-            output = BytesIO()
-            df.to_excel(output, index=False, engine="openpyxl")
-            output.seek(0)
-            st.download_button("⬇️ Download File", output, file_name="updated_registry_review.xlsx")
+            df.to_excel("updated_registry_review.xlsx", index=False)
+            with open("updated_registry_review.xlsx", "rb") as f:
+                st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
