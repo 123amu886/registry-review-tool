@@ -6,7 +6,7 @@ import re
 import json
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Updated)")
+st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
 
 # -------------------------------
 # 1. Load JSON mapping files
@@ -25,20 +25,10 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic with numeric extraction
+# 2. Infant inclusion logic
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
-
-    # Extract numeric minimum ages
-    age_matches = re.findall(r"(\d+)\s*(month|year)", text_lower)
-    min_age_months = None
-    if age_matches:
-        for age, unit in age_matches:
-            age = int(age)
-            age_in_months = age if unit.startswith("month") else age * 12
-            if min_age_months is None or age_in_months < min_age_months:
-                min_age_months = age_in_months
 
     # Patterns for "Include infants"
     include_patterns = [
@@ -55,13 +45,10 @@ def assess_infant_inclusion(text, condition):
         r"0[-\s]*24\s*months",
         r"from\s*1\s*year",
         r"from\s*12\s*months",
-        r"12\s*months",
-        r"18\s*months",
-        r"1\s*year"
+        r">\s*12\s*months",
+        r">\s*18\s*months",
+        r">\s*1\s*year"
     ]
-
-    if any(re.search(p, text_lower) for p in include_patterns):
-        return "Include infants"
 
     # Patterns for "Likely to include infants"
     likely_patterns = [
@@ -69,97 +56,92 @@ def assess_infant_inclusion(text, condition):
         r"from\s*6\s*months",
         r"from\s*1\s*year",
         r"from\s*12\s*months",
-        r"(up to.*months|up to.*years)"
+        r"(from\s*(0|6|12|18)\s*months.*up to)",
+        r"(from\s*1\s*year.*up to)"
     ]
 
+    # Check "Include infants" first
+    if any(re.search(p, text_lower) for p in include_patterns):
+        return "Include infants"
+
+    # Then check "Likely to include infants"
     if any(re.search(p, text_lower) for p in likely_patterns):
         return "Likely to include infants"
 
-    # Explicit exclusion
-    if re.search(r"(no infants|excluding infants)", text_lower):
-        return "Does not include infants"
+    # Check "Unlikely to include infants but possible" if min age exactly 2 years or 24 months
+    if re.search(r"(2\s*years|24\s*months)", text_lower):
+        return "Unlikely to include infants but possible"
 
-    # Numeric-based classification
-    if min_age_months is not None:
-        if min_age_months >= 24:
-            if min_age_months == 24:
-                return "Unlikely to include infants but possible"
-            else:
-                return "Does not include infants"
+    # Check "Does not include infants" if minimum age ≥ 2 years
+    if re.search(r"(minimum age\s*[:\s]*[2-9]\s*years?)", text_lower):
+        return "Does not include infants"
 
     # Fallback
     return "Uncertain"
 
 # -------------------------------
-# 3. CGT relevance logic with mapping and keyword parsing
+# 3. FDA approval check (mock using mapping for now)
 # -------------------------------
-def assess_cgt_relevance(condition, text):
+def fda_approved(condition):
     condition_lower = condition.lower()
-    relevance = cgt_map.get(condition_lower, None)
-
-    # If mapping states Relevant or Likely Relevant
-    if relevance in ["Relevant", "Likely Relevant"]:
-        return relevance
-
-    # Keyword detection in text
-    cgt_keywords = ["gene therapy", "cell therapy", "crispr", "car-t", "gene replacement"]
-    text_lower = text.lower() if pd.notna(text) else ""
-
-    if any(k in text_lower for k in cgt_keywords):
-        return "Likely Relevant"
-
-    return "Unsure"
+    approval = cgt_map.get(condition_lower, {}).get("fda_approved", False)
+    return approval
 
 # -------------------------------
-# 4. ClinicalTrials.gov and external links check
+# 4. ClinicalTrials.gov API active trial check
 # -------------------------------
-def check_gene_cell_therapy(condition):
-    links = []
-
-    # ClinicalTrials.gov gene therapy trials
+def clinical_trials_gov_active(condition):
     try:
         search_url = "https://clinicaltrials.gov/api/query/study_fields"
         search_params = {
             "expr": f"{condition} gene therapy",
-            "fields": "NCTId,BriefTitle,OverallStatus",
+            "fields": "NCTId,OverallStatus",
             "min_rnk": 1,
-            "max_rnk": 3,
+            "max_rnk": 5,
             "fmt": "json"
         }
         r = requests.get(search_url, params=search_params, timeout=10)
         data = r.json()
         studies = data['StudyFieldsResponse']['StudyFields']
-        if studies:
-            for s in studies:
-                nct_id = s.get("NCTId", ["N/A"])[0]
-                title = s.get("BriefTitle", ["N/A"])[0]
-                status = s.get("OverallStatus", ["N/A"])[0]
-                ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
-                links.append({
-                    "title": f"{title} (Status: {status})",
-                    "link": ct_link
-                })
+        for s in studies:
+            status = s.get("OverallStatus", [""])[0].lower()
+            if "recruiting" in status or "active" in status or "enrolling" in status:
+                return True
+        return False
     except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov API error: {e}")
-
-    # Google search fallback
-    google_query = f"https://www.google.com/search?q=is+there+a+gene+or+cell+therapy+for+{condition.replace(' ','+')}"
-    links.append({
-        "title": "Google Search: Is there a gene or cell therapy for this condition?",
-        "link": google_query
-    })
-
-    # PubMed search fallback
-    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
-    links.append({
-        "title": "PubMed Search",
-        "link": pubmed_url
-    })
-
-    return links
+        print(f"⚠️ ClinicalTrials.gov error: {e}")
+        return False
 
 # -------------------------------
-# 5. Contact email scraper
+# 5. PubMed/Google preclinical fallback check
+# -------------------------------
+def pubmed_or_google_preclinical(condition):
+    keywords = ["gene therapy", "crispr therapy", "gene replacement therapy"]
+    for k in keywords:
+        google_query = f"https://www.google.com/search?q={condition.replace(' ','+')}+{k.replace(' ','+')}"
+        try:
+            r = requests.get(google_query, timeout=8)
+            if "gene therapy" in r.text.lower() or "crispr" in r.text.lower():
+                return True
+        except Exception as e:
+            print(f"⚠️ Google search error: {e}")
+    return False
+
+# -------------------------------
+# 6. Assess CGT relevance logic
+# -------------------------------
+def assess_cgt_relevance(condition):
+    if fda_approved(condition):
+        return "Relevant"
+    elif clinical_trials_gov_active(condition):
+        return "Likely Relevant"
+    elif pubmed_or_google_preclinical(condition):
+        return "Likely Relevant"
+    else:
+        return "Unsure"
+
+# -------------------------------
+# 7. Contact email scraper
 # -------------------------------
 def extract_email(url):
     try:
@@ -175,7 +157,7 @@ def extract_email(url):
         return ""
 
 # -------------------------------
-# 6. Streamlit app flow
+# 8. Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
@@ -212,19 +194,11 @@ if uploaded_file:
             str(record.get("Brief Summary", ""))
         ])
 
-        # Inclusion logic
         suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
+        st.caption(f"🧒 Suggested: **{suggested_infant}**")
 
-        # CGT relevance logic
-        suggested_cgt = assess_cgt_relevance(condition, study_texts)
-        st.caption(f"🧬 Suggested CGT Relevance: **{suggested_cgt}**")
-
-        # Gene/cell therapy existence check
-        therapy_links = check_gene_cell_therapy(condition)
-        st.markdown("🔗 **Gene/Cell Therapy Existence Links:**")
-        for l in therapy_links:
-            st.markdown(f"- [{l['title']}]({l['link']})")
+        suggested_cgt = assess_cgt_relevance(condition)
+        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
 
         email = st.text_input("Contact email", extract_email(record["Web site"]))
 
