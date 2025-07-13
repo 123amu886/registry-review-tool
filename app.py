@@ -9,7 +9,7 @@ import json
 # Page setup
 # -------------------------------
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Reviewer Integrated)")
+st.title("🧾 Clinical Registry Review Tool (Reviewer Integrated One-by-One)")
 
 # -------------------------------
 # Load mapping files
@@ -161,6 +161,7 @@ if uploaded_file:
             st.write(f"✅ {len(df_filtered)} rows found for reviewer '{reviewer_name}'.")
 
             for i, row in df_filtered.iterrows():
+                st.markdown("---")
                 condition = row.get("Conditions", "")
                 study_texts = " ".join([
                     str(row.get("Population (use drop down list)", "")),
@@ -169,13 +170,25 @@ if uploaded_file:
                     str(row.get("Brief Summary", ""))
                 ])
 
+                st.markdown(f"### **Condition:** {condition}")
+
                 infant_inclusion = assess_infant_inclusion(study_texts, condition)
                 cgt_relevance, links = assess_cgt_relevance_and_links(study_texts, condition)
 
-                df.loc[i, "Infant Inclusion"] = infant_inclusion
-                df.loc[i, "CGT Relevance"] = cgt_relevance
+                st.write(f"🧒 **Infant Inclusion:** {infant_inclusion}")
+                st.write(f"🧬 **CGT Relevance:** {cgt_relevance}")
 
-            st.success("✅ Updated the Excel with infant inclusion and CGT relevance.")
+                if links:
+                    st.markdown("🔗 **Related Links:**")
+                    for l in links:
+                        st.markdown(f"- [{l['title']}]({l['link']})")
+
+                note = st.text_area(f"📝 Add reviewer note for row {i}:", value=row.get("Reviewer Notes", ""))
+                if st.button(f"💾 Save note for row {i}"):
+                    df.loc[i, "Reviewer Notes"] = note
+                    df.loc[i, "Infant Inclusion"] = infant_inclusion
+                    df.loc[i, "CGT Relevance"] = cgt_relevance
+                    st.success(f"✅ Saved note and assessments for row {i}.")
 
             # Download updated Excel
             if st.button("⬇️ Download Updated Excel"):
