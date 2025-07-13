@@ -9,7 +9,7 @@ import json
 # Page setup
 # -------------------------------
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Reviewer Integrated One-by-One)")
+st.title("🧾 Clinical Registry Review Tool (Final Robust)")
 
 # -------------------------------
 # Load mapping files
@@ -73,7 +73,7 @@ def assess_infant_inclusion(text, condition):
     return "Uncertain"
 
 # -------------------------------
-# CGT relevance function
+# CGT relevance function with robust filtering
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
@@ -90,35 +90,49 @@ def assess_cgt_relevance_and_links(text, condition):
             })
             return "Relevant (FDA Approved)", links
 
-    # B. ClinicalTrials.gov
+    # B. ClinicalTrials.gov Phase III check
     try:
         url = "https://clinicaltrials.gov/api/query/study_fields"
         params = {
             "expr": f"{condition} gene therapy",
             "fields": "NCTId,BriefTitle,Phase,OverallStatus",
             "min_rnk": 1,
-            "max_rnk": 3,
+            "max_rnk": 10,
             "fmt": "json"
         }
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
         studies = data['StudyFieldsResponse']['StudyFields']
+
         for s in studies:
-            links.append({
-                "nct_id": s["NCTId"][0],
-                "title": s["BriefTitle"][0],
-                "phase": s.get("Phase", ["N/A"])[0],
-                "status": s.get("OverallStatus", ["N/A"])[0],
-                "link": f"https://clinicaltrials.gov/ct2/show/{s['NCTId'][0]}"
-            })
+            phase = s.get("Phase", ["N/A"])[0]
+            if "Phase 3" in phase or "Phase III" in phase:
+                links.append({
+                    "nct_id": s["NCTId"][0],
+                    "title": f"{s['BriefTitle'][0]} (Near Approval)",
+                    "phase": phase,
+                    "status": s.get("OverallStatus", ["N/A"])[0],
+                    "link": f"https://clinicaltrials.gov/ct2/show/{s['NCTId'][0]}"
+                })
+                return "Likely Relevant (Phase III / Near Approval)", links
+
         if studies:
+            for s in studies:
+                links.append({
+                    "nct_id": s["NCTId"][0],
+                    "title": s["BriefTitle"][0],
+                    "phase": s.get("Phase", ["N/A"])[0],
+                    "status": s.get("OverallStatus", ["N/A"])[0],
+                    "link": f"https://clinicaltrials.gov/ct2/show/{s['NCTId'][0]}"
+                })
             return "Relevant (Clinical Trials)", links
+
     except:
         pass
 
-    # C. Preclinical PubMed
+    # C. Filtered PubMed preclinical pipeline
     try:
-        query = f"{condition} gene therapy preclinical OR animal model OR in vitro"
+        query = f"{condition} gene therapy preclinical OR animal model OR in vivo"
         url = f"https://pubmed.ncbi.nlm.nih.gov/?term={query.replace(' ', '+')}"
         r = requests.get(url, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -126,10 +140,14 @@ def assess_cgt_relevance_and_links(text, condition):
         for article in soup.select('.docsum-content'):
             title = article.select_one('.docsum-title').get_text(strip=True)
             link = "https://pubmed.ncbi.nlm.nih.gov" + article.select_one('.docsum-title')['href']
-            links.append({"title": title, "link": link})
+
+            # Only include titles with translational relevance
+            if any(kw in title.lower() for kw in ["preclinical", "animal model", "gene therapy", "vector", "in vivo", "functional rescue", "treatment"]):
+                links.append({"title": title, "link": link})
 
         if links:
             return "Likely Relevant (Preclinical)", links
+
     except:
         pass
 
@@ -184,10 +202,19 @@ if uploaded_file:
                         st.markdown(f"- [{l['title']}]({l['link']})")
 
                 note = st.text_area(f"📝 Add reviewer note for row {i}:", value=row.get("Reviewer Notes", ""))
-                if st.button(f"💾 Save note for row {i}"):
+
+                override_relevance = st.selectbox(
+                    f"🔧 Override CGT relevance for row {i} if needed:",
+                    ["No change", "Relevant", "Likely Relevant", "Unlikely Relevant", "Not Relevant", "Unsure"]
+                )
+
+                if st.button(f"💾 Save note and assessments for row {i}"):
                     df.loc[i, "Reviewer Notes"] = note
                     df.loc[i, "Infant Inclusion"] = infant_inclusion
-                    df.loc[i, "CGT Relevance"] = cgt_relevance
+                    if override_relevance != "No change":
+                        df.loc[i, "CGT Relevance"] = override_relevance
+                    else:
+                        df.loc[i, "CGT Relevance"] = cgt_relevance
                     st.success(f"✅ Saved note and assessments for row {i}.")
 
             # Download updated Excel
