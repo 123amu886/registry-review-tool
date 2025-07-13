@@ -26,16 +26,23 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (with debug and improved regex)
+# 2. Infant inclusion logic (strict order, debug, fixed regex)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
     condition_lower = condition.lower()
     onset = age_map.get(condition_lower, "").lower()
 
-    # Debug info
     print(f"DEBUG: Assessing infant inclusion for condition: {condition}")
     print(f"DEBUG: Text: {text_lower}")
+
+    # First, detect any age >= 2 years or 24 months (priority check)
+    age_matches = re.findall(r"\b(\d+)\s*(months|years?)\b", text_lower)
+    for age_num_str, age_unit in age_matches:
+        age_num = int(age_num_str)
+        if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
+            print(f"DEBUG: Found age {age_num} {age_unit} >= 2 years threshold")
+            return "Unlikely to include infants but possible"
 
     include_patterns = [
         r"from\s*0\b",
@@ -53,6 +60,11 @@ def assess_infant_inclusion(text, condition):
         r"(?<!\d)1\s*year(?!\d)",
     ]
 
+    for pat in include_patterns:
+        if re.search(pat, text_lower):
+            print(f"DEBUG: Include infants matched pattern: {pat}")
+            return "Include infants"
+
     likely_include_patterns = [
         r"from\s*0\b",
         r"from\s*6\s*months\b",
@@ -61,39 +73,15 @@ def assess_infant_inclusion(text, condition):
         r"starting at\s*(0|6|12|18)\s*(months|years?)\b"
     ]
 
-    # Detect any age >= 2 years anywhere
-    min_age_over_2_years = False
-    age_matches = re.findall(r"\b(\d+)\s*(months|years?)\b", text_lower)
-    for age_num_str, age_unit in age_matches:
-        age_num = int(age_num_str)
-        print(f"DEBUG: Found age {age_num} {age_unit}")
-        if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
-            min_age_over_2_years = True
-            break
-
-    # If big age anywhere, return 'Unlikely' immediately
-    if min_age_over_2_years:
-        print("DEBUG: Age >= 2 years found, returning 'Unlikely to include infants but possible'")
-        return "Unlikely to include infants but possible"
-
-    # Now check Include infants patterns
-    for pat in include_patterns:
-        if re.search(pat, text_lower):
-            print(f"DEBUG: Include infants matched pattern: {pat}")
-            return "Include infants"
-
-    # Then Likely to include
     for pat in likely_include_patterns:
         if re.search(pat, text_lower):
             print(f"DEBUG: Likely to include infants matched pattern: {pat}")
             return "Likely to include infants"
 
-    # Explicit excludes
     if "no infants" in text_lower or "does not include infants" in text_lower:
         print("DEBUG: Explicit exclusion found")
         return "Does not include infants"
 
-    # Check onset info for large age
     if re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
         print("DEBUG: Onset info indicates >= 2 years")
         return "Unlikely to include infants but possible"
