@@ -207,15 +207,15 @@ def check_clinicaltrials_gov(condition):
         return []
 
 # -------------------------------
-# CGT relevance check
+# CGT relevance check (fixed)
 # -------------------------------
 def assess_cgt_relevance(condition):
     condition_lower = condition.lower()
-    relevance = cgt_map.get(condition_lower, {}).get("relevance", "Unsure")
+    relevance = cgt_map.get(condition_lower, "Unsure")  # now directly get string value
     if relevance in ["Relevant", "Likely Relevant"]:
         return relevance
 
-    # Fallback to Google search for gene therapy presence
+    # fallback: Google search link
     query = f"is there a gene therapy for {condition}"
     google_search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
     return f"Check Google: {google_search_url}"
