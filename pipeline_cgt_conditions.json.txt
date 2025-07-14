@@ -1,0 +1,18 @@
+{
+  "conditions": [
+    "pompe disease",
+    "methylmalonic acidemia",
+    "mma",
+    "ornithine transcarbamylase deficiency",
+    "otc deficiency",
+    "cystinosis",
+    "phenylketonuria",
+    "pku",
+    "glycogen storage disease",
+    "argininemia",
+    "urea cycle disorder",
+    "metachromatic leukodystrophy",
+    "mld",
+    "gauchers disease"
+  ]
+}
