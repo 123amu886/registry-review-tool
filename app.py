@@ -25,34 +25,34 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (final refined)
+# 2. Final refined infant inclusion logic
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
 
-    # Extract all age mentions (min and max)
+    # Extract minimum age in months
     ages = re.findall(r"(\d+)\s*(month|year)", text_lower)
     min_age_months = None
     if ages:
+        min_age_months = float('inf')
         for age, unit in ages:
             age = int(age)
-            age_in_months = age if unit.startswith("month") else age * 12
-            if min_age_months is None or age_in_months < min_age_months:
+            age_in_months = age if "month" in unit else age * 12
+            if age_in_months < min_age_months:
                 min_age_months = age_in_months
 
-    # "Up to" logic overrides to Likely to include infants
+    # 1. "up to" logic overrides everything
     if "up to" in text_lower:
         return "Likely to include infants"
 
-    # Minimum age classification
-    if min_age_months is not None:
-        if min_age_months >= 24:
-            if min_age_months == 24:
-                return "Unlikely to include infants but possible"
-            else:
-                return "Does not include infants"
+    # 2. Minimum age classification
+    if min_age_months != None and min_age_months != float('inf'):
+        if min_age_months > 24:
+            return "Does not include infants"
+        elif min_age_months == 24:
+            return "Unlikely to include infants but possible"
 
-    # Adjusted include infants patterns
+    # 3. Include infants patterns
     include_patterns = [
         r"\bfrom\s*0\b",
         r"\bfrom\s*6\s*months\b",
@@ -76,21 +76,21 @@ def assess_infant_inclusion(text, condition):
     if re.search(r"(^|\D)1\s*year(\D|$)", text_lower):
         return "Include infants"
 
-    # Regex-based inclusion matching
-    if any(re.search(p, text_lower) for p in include_patterns):
-        return "Include infants"
+    for pattern in include_patterns:
+        if re.search(pattern, text_lower):
+            return "Include infants"
 
-    # Likely to include infants by age of onset mapping
+    # 4. Age of onset mapping logic
     onset = age_map.get(condition.lower(), "").lower()
     likely_phrases = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
     if any(x in onset for x in likely_phrases):
         return "Likely to include infants"
 
-    # Explicit exclusion
+    # 5. Explicit exclusion
     if re.search(r"(no infants|excluding infants|does not include infants)", text_lower):
         return "Does not include infants"
 
-    # Uncertain fallback
+    # 6. Default
     return "Uncertain"
 
 # -------------------------------
