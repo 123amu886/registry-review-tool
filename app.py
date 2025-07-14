@@ -6,7 +6,7 @@ import re
 import json
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
+st.title("🧾 Clinical Registry Review Tool (Final Updated)")
 
 # -------------------------------
 # 1. Load JSON mapping files
@@ -25,157 +25,134 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (final corrected version)
+# 2. Infant inclusion logic (final)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
-    condition_lower = condition.lower()
-    onset = age_map.get(condition_lower, "").lower()
 
-    print(f"DEBUG: Assessing infant inclusion for condition: {condition}")
-    print(f"DEBUG: Text: {text_lower}")
+    # Extract numeric minimum ages
+    age_matches = re.findall(r"(\d+)\s*(month|year)", text_lower)
+    min_age_months = None
+    if age_matches:
+        for age, unit in age_matches:
+            age = int(age)
+            age_in_months = age if unit.startswith("month") else age * 12
+            if min_age_months is None or age_in_months < min_age_months:
+                min_age_months = age_in_months
 
-    # 1. Explicit exclusion first
-    if "no infants" in text_lower or "does not include infants" in text_lower:
-        print("DEBUG: Explicit exclusion found")
-        return "Does not include infants"
-
-    # 2. INCLUDE INFANTS patterns
+    # 1. Include infants
     include_patterns = [
-        r"\bfrom\s*0\b",
+        r"from\s*0",
+        r"from\s*6\s*months",
+        r"from\s*12\s*months",
+        r"from\s*1\s*year",
         r"starting at birth",
-        r"\bnewborn\b",
-        r"\binfants?\b",
+        r"newborn",
+        r"infants?",
         r"less than\s*(12|18|24)\s*months",
         r"<\s*(12|18|24)\s*months",
-        r"<\s*(1|2)\s*years?\b",
-        r"up to\s*(18|24)\s*months",
+        r"<\s*(1|2)\s*years?",
+        r"up to\s*18\s*months",
         r"up to\s*2\s*years",
         r"0[-\s]*2\s*years",
+        r"0[-\s]*18\s*months",
         r"0[-\s]*24\s*months",
-        r"\b12\s*months\b",
-        r"\b18\s*months\b",
-        r"(?<!\d)1\s*year(?!\d)"
+        r"12\s*months",
+        r"18\s*months",
+        r"1\s*year"
     ]
-
-    for pat in include_patterns:
-        if re.search(pat, text_lower):
-            print(f"DEBUG: Include infants matched pattern: {pat}")
-            return "Include infants"
-
-    # 3. LIKELY TO INCLUDE INFANTS: "up to" any age (even beyond 2 years)
-    if re.search(r"up to\s*\d+\s*(months|years?)", text_lower):
-        print("DEBUG: 'Up to' found, Likely to include infants")
-        return "Likely to include infants"
-
-    # 4. MINIMUM AGE ≥ 2 years or 24 months → Unlikely to include infants but possible
-    age_matches = re.findall(r"\b(\d+)\s*(months|years?)\b", text_lower)
-    for age_num_str, age_unit in age_matches:
-        age_num = int(age_num_str)
-        if (age_unit.startswith("year") and age_num >= 2) or (age_unit.startswith("month") and age_num >= 24):
-            print(f"DEBUG: Found minimum age {age_num} {age_unit} >= 2 years threshold")
-            return "Unlikely to include infants but possible"
-
-    # 5. Onset mapping fallback
-    if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
-        print("DEBUG: Onset mapping indicates Include infants")
+    if any(re.search(p, text_lower) for p in include_patterns):
         return "Include infants"
 
-    if re.search(r"\b2\s*years?\b", onset) or re.search(r"\b24\s*months\b", onset):
-        print("DEBUG: Onset mapping indicates >= 2 years")
-        return "Unlikely to include infants but possible"
+    # 2. Likely to include infants (by age of onset mapping)
+    onset = age_map.get(condition.lower(), "").lower()
+    likely_phrases = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
+    if any(x in onset for x in likely_phrases):
+        return "Likely to include infants"
 
-    # 6. Default
-    print("DEBUG: No clear match, returning Uncertain")
+    # Also capture "up to" phrases starting from infant-related minimums
+    if re.search(r"(up to.*months|up to.*years)", text_lower) and any(
+        re.search(p, text_lower) for p in [r"from\s*0", r"from\s*6\s*months", r"from\s*12\s*months", r"from\s*1\s*year", r"from\s*18\s*months"]
+    ):
+        return "Likely to include infants"
+
+    # 3. Does not include infants (explicit exclusion)
+    if re.search(r"(no infants|excluding infants|does not include infants)", text_lower):
+        return "Does not include infants"
+
+    # 4. Unlikely to include infants but possible
+    if min_age_months is not None:
+        if min_age_months >= 24:
+            if min_age_months == 24:
+                return "Unlikely to include infants but possible"
+            else:
+                return "Does not include infants"
+
+    # 5. Uncertain fallback
     return "Uncertain"
 
 # -------------------------------
-# 3. ClinicalTrials.gov API with contacts and locations
+# 3. CGT relevance logic
 # -------------------------------
-def check_clinicaltrials_gov(condition):
+def assess_cgt_relevance(condition, text):
+    condition_lower = condition.lower()
+    relevance = cgt_map.get(condition_lower, None)
+
+    if relevance in ["Relevant", "Likely Relevant"]:
+        return relevance
+
+    cgt_keywords = ["gene therapy", "cell therapy", "crispr", "car-t", "gene replacement"]
+    text_lower = text.lower() if pd.notna(text) else ""
+
+    if any(k in text_lower for k in cgt_keywords):
+        return "Likely Relevant"
+
+    return "Unsure"
+
+# -------------------------------
+# 4. ClinicalTrials.gov and external links check
+# -------------------------------
+def check_gene_cell_therapy(condition):
+    links = []
+
     try:
         search_url = "https://clinicaltrials.gov/api/query/study_fields"
         search_params = {
             "expr": f"{condition} gene therapy",
-            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
+            "fields": "NCTId,BriefTitle,OverallStatus",
             "min_rnk": 1,
             "max_rnk": 3,
             "fmt": "json"
         }
-        search_r = requests.get(search_url, params=search_params, timeout=10)
-        search_data = search_r.json()
-        studies = search_data['StudyFieldsResponse']['StudyFields']
-        study_info = []
-
-        for s in studies:
-            nct_id = s["NCTId"][0]
-            title = s["BriefTitle"][0]
-            phase = s.get("Phase", ["N/A"])[0]
-            status = s.get("OverallStatus", ["N/A"])[0]
-            ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
-
-            study_info.append({
-                "nct_id": nct_id,
-                "title": title,
-                "phase": phase,
-                "status": status,
-                "link": ct_link,
-                "contacts": [],
-                "locations": []
-            })
-
-        return study_info
-
+        r = requests.get(search_url, params=search_params, timeout=10)
+        data = r.json()
+        studies = data['StudyFieldsResponse']['StudyFields']
+        if studies:
+            for s in studies:
+                nct_id = s.get("NCTId", ["N/A"])[0]
+                title = s.get("BriefTitle", ["N/A"])[0]
+                status = s.get("OverallStatus", ["N/A"])[0]
+                ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
+                links.append({
+                    "title": f"{title} (Status: {status})",
+                    "link": ct_link
+                })
     except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
-        return []
+        print(f"⚠️ ClinicalTrials.gov API error: {e}")
 
-# -------------------------------
-# 4. CGT relevance logic
-# -------------------------------
-def assess_cgt_relevance_and_links(text, condition):
-    links = []
-    condition_lower = condition.lower()
-
-    relevance = cgt_map.get(condition_lower, None)
-    studies = check_clinicaltrials_gov(condition)
-    if studies:
-        links.extend(studies)
-
-    if relevance in ["Relevant", "Likely Relevant"] and studies:
-        return relevance, links
-
-    cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
-                    "gene editing", "gene correction", "gene silencing", "reprogramming",
-                    "cgt", "c&gt", "car-t therapy"]
-    text_lower = text.lower() if pd.notna(text) else ""
-
-    if any(k in text_lower for k in cgt_keywords):
-        relevance = "Likely Relevant"
-    else:
-        relevance = "Unsure"
-
-    google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
+    google_query = f"https://www.google.com/search?q=is+there+a+gene+or+cell+therapy+for+{condition.replace(' ','+')}"
     links.append({
-        "title": "Google Search: Is there a gene therapy for this condition?",
-        "link": google_query,
-        "phase": "N/A",
-        "status": "N/A",
-        "contacts": [],
-        "locations": []
+        "title": "Google Search: Is there a gene or cell therapy for this condition?",
+        "link": google_query
     })
 
     pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
     links.append({
         "title": "PubMed Search",
-        "link": pubmed_url,
-        "phase": "N/A",
-        "status": "N/A",
-        "contacts": [],
-        "locations": []
+        "link": pubmed_url
     })
 
-    return relevance, links
+    return links
 
 # -------------------------------
 # 5. Contact email scraper
@@ -232,19 +209,15 @@ if uploaded_file:
         ])
 
         suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested: **{suggested_infant}**")
+        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
 
-        suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
-        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
+        suggested_cgt = assess_cgt_relevance(condition, study_texts)
+        st.caption(f"🧬 Suggested CGT Relevance: **{suggested_cgt}**")
 
-        if study_links:
-            st.markdown("🔗 **Related Studies & Database Links:**")
-            for s in study_links:
-                st.markdown(f"- **{s['title']}** (Phase: {s['phase']}, Status: {s['status']}) [View Study]({s['link']})")
-                if s['contacts']:
-                    st.markdown(f"  **Contacts:** {', '.join(s['contacts'])}")
-                if s['locations']:
-                    st.markdown(f"  **Locations:** {', '.join(s['locations'])}")
+        therapy_links = check_gene_cell_therapy(condition)
+        st.markdown("🔗 **Gene/Cell Therapy Existence Links:**")
+        for l in therapy_links:
+            st.markdown(f"- [{l['title']}]({l['link']})")
 
         email = st.text_input("Contact email", extract_email(record["Web site"]))
 
@@ -277,6 +250,7 @@ if uploaded_file:
             st.success("✅ Saved!")
 
         if st.button("⬇️ Export Updated Excel"):
-            df.to_excel("updated_registry_review.xlsx", index=False)
-            with open("updated_registry_review.xlsx", "rb") as f:
-                st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
+            from io import BytesIO
+            output = BytesIO()
+            df.to_excel(output, index=False, engine='openpyxl')
+            st.download_button("⬇️ Download File", output, file_name="updated_registry_review.xlsx")
