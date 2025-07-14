@@ -6,7 +6,7 @@ import re
 import json
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Updated)")
+st.title("🧾 Clinical Registry Review Tool (Final Production)")
 
 # -------------------------------
 # 1. Load JSON mapping files
@@ -25,30 +25,38 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion logic (final)
+# 2. Infant inclusion logic (final refined)
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
 
-    # Extract numeric minimum ages
-    age_matches = re.findall(r"(\d+)\s*(month|year)", text_lower)
+    # Extract minimum age in months if available
+    ages = re.findall(r"(\d+)\s*(month|year)", text_lower)
     min_age_months = None
-    if age_matches:
-        for age, unit in age_matches:
+    if ages:
+        for age, unit in ages:
             age = int(age)
             age_in_months = age if unit.startswith("month") else age * 12
             if min_age_months is None or age_in_months < min_age_months:
                 min_age_months = age_in_months
 
-    # 1. Include infants
+    # Categorize based on minimum age before regex-based inclusion
+    if min_age_months is not None:
+        if min_age_months >= 24:
+            if min_age_months == 24:
+                return "Unlikely to include infants but possible"
+            else:
+                return "Does not include infants"
+
+    # Include infants patterns with word boundaries
     include_patterns = [
-        r"from\s*0",
-        r"from\s*6\s*months",
-        r"from\s*12\s*months",
-        r"from\s*1\s*year",
-        r"starting at birth",
-        r"newborn",
-        r"infants?",
+        r"\bfrom\s*0\b",
+        r"\bfrom\s*6\s*months\b",
+        r"\bfrom\s*12\s*months\b",
+        r"\bfrom\s*1\s*year\b",
+        r"\bstarting at birth\b",
+        r"\bnewborn\b",
+        r"\binfants?\b",
         r"less than\s*(12|18|24)\s*months",
         r"<\s*(12|18|24)\s*months",
         r"<\s*(1|2)\s*years?",
@@ -57,38 +65,30 @@ def assess_infant_inclusion(text, condition):
         r"0[-\s]*2\s*years",
         r"0[-\s]*18\s*months",
         r"0[-\s]*24\s*months",
-        r"12\s*months",
-        r"18\s*months",
-        r"1\s*year"
+        r"\b12\s*months\b",
+        r"\b18\s*months\b",
+        r"\b1\s*year\b"
     ]
     if any(re.search(p, text_lower) for p in include_patterns):
         return "Include infants"
 
-    # 2. Likely to include infants (by age of onset mapping)
+    # Likely to include infants by age of onset mapping
     onset = age_map.get(condition.lower(), "").lower()
     likely_phrases = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
     if any(x in onset for x in likely_phrases):
         return "Likely to include infants"
 
-    # Also capture "up to" phrases starting from infant-related minimums
+    # "Up to" patterns starting from infant-related minimums
     if re.search(r"(up to.*months|up to.*years)", text_lower) and any(
-        re.search(p, text_lower) for p in [r"from\s*0", r"from\s*6\s*months", r"from\s*12\s*months", r"from\s*1\s*year", r"from\s*18\s*months"]
+        re.search(p, text_lower) for p in [r"\bfrom\s*0\b", r"\bfrom\s*6\s*months\b", r"\bfrom\s*12\s*months\b", r"\bfrom\s*1\s*year\b", r"\bfrom\s*18\s*months\b"]
     ):
         return "Likely to include infants"
 
-    # 3. Does not include infants (explicit exclusion)
+    # Explicit exclusion
     if re.search(r"(no infants|excluding infants|does not include infants)", text_lower):
         return "Does not include infants"
 
-    # 4. Unlikely to include infants but possible
-    if min_age_months is not None:
-        if min_age_months >= 24:
-            if min_age_months == 24:
-                return "Unlikely to include infants but possible"
-            else:
-                return "Does not include infants"
-
-    # 5. Uncertain fallback
+    # Uncertain fallback
     return "Uncertain"
 
 # -------------------------------
