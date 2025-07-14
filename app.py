@@ -6,7 +6,7 @@ import re
 import json
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Production)")
+st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
 
 # -------------------------------
 # 1. Load JSON mapping files
@@ -25,10 +25,8 @@ cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Refined infant inclusion logic
+# Infant inclusion logic helpers
 # -------------------------------
-import re
-
 def extract_ages(text):
     """
     Extract min and max age (in months) from text.
@@ -137,70 +135,93 @@ def assess_infant_inclusion(text, condition, age_map):
     return "Uncertain"
 
 # -------------------------------
-# 3. CGT relevance logic
+# ClinicalTrials.gov API with contacts and locations
 # -------------------------------
-def assess_cgt_relevance(condition, text):
-    condition_lower = condition.lower()
-    relevance = cgt_map.get(condition_lower, None)
-
-    if relevance in ["Relevant", "Likely Relevant"]:
-        return relevance
-
-    cgt_keywords = ["gene therapy", "cell therapy", "crispr", "car-t", "gene replacement"]
-    text_lower = text.lower() if pd.notna(text) else ""
-
-    if any(k in text_lower for k in cgt_keywords):
-        return "Likely Relevant"
-
-    return "Unsure"
-
-# -------------------------------
-# 4. ClinicalTrials.gov and external links check
-# -------------------------------
-def check_gene_cell_therapy(condition):
-    links = []
-
+def check_clinicaltrials_gov(condition):
     try:
         search_url = "https://clinicaltrials.gov/api/query/study_fields"
         search_params = {
             "expr": f"{condition} gene therapy",
-            "fields": "NCTId,BriefTitle,OverallStatus",
+            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
             "min_rnk": 1,
             "max_rnk": 3,
             "fmt": "json"
         }
-        r = requests.get(search_url, params=search_params, timeout=10)
-        data = r.json()
-        studies = data['StudyFieldsResponse']['StudyFields']
-        if studies:
-            for s in studies:
-                nct_id = s.get("NCTId", ["N/A"])[0]
-                title = s.get("BriefTitle", ["N/A"])[0]
-                status = s.get("OverallStatus", ["N/A"])[0]
-                ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
-                links.append({
-                    "title": f"{title} (Status: {status})",
-                    "link": ct_link
-                })
+        search_r = requests.get(search_url, params=search_params, timeout=10)
+        search_data = search_r.json()
+        studies = search_data['StudyFieldsResponse']['StudyFields']
+        study_info = []
+
+        for s in studies:
+            nct_id = s["NCTId"][0]
+            title = s["BriefTitle"][0]
+            phase = s.get("Phase", ["N/A"])[0]
+            status = s.get("OverallStatus", ["N/A"])[0]
+            ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
+
+            detail_url = "https://clinicaltrials.gov/api/query/full_studies"
+            detail_params = {"expr": nct_id, "fmt": "json"}
+            detail_r = requests.get(detail_url, params=detail_params, timeout=10)
+            detail_data = detail_r.json()
+
+            contacts = []
+            locations = []
+
+            try:
+                full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
+                protocol_section = full_study.get('ProtocolSection', {})
+                contacts_module = protocol_section.get('ContactsLocationsModule', {})
+
+                overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
+                for contact in overall_officials:
+                    name = contact.get('LastName', 'N/A')
+                    role = contact.get('Role', 'N/A')
+                    contacts.append(f"{name} ({role})")
+
+                location_list = contacts_module.get('LocationList', {}).get('Location', [])
+                for loc in location_list:
+                    facility = loc.get('LocationFacility', 'N/A')
+                    city = loc.get('LocationCity', 'N/A')
+                    country = loc.get('LocationCountry', 'N/A')
+                    locations.append(f"{facility}, {city}, {country}")
+
+            except Exception as e:
+                print(f"⚠️ Detail parsing error for {nct_id}: {e}")
+                contacts = ["No contact data found."]
+                locations = ["No location data found."]
+
+            study_info.append({
+                "nct_id": nct_id,
+                "title": title,
+                "phase": phase,
+                "status": status,
+                "link": ct_link,
+                "contacts": contacts,
+                "locations": locations
+            })
+
+        return study_info
+
     except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov API error: {e}")
-
-    google_query = f"https://www.google.com/search?q=is+there+a+gene+or+cell+therapy+for+{condition.replace(' ','+')}"
-    links.append({
-        "title": "Google Search: Is there a gene or cell therapy for this condition?",
-        "link": google_query
-    })
-
-    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
-    links.append({
-        "title": "PubMed Search",
-        "link": pubmed_url
-    })
-
-    return links
+        print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
+        return []
 
 # -------------------------------
-# 5. Contact email scraper
+# CGT relevance check
+# -------------------------------
+def assess_cgt_relevance(condition):
+    condition_lower = condition.lower()
+    relevance = cgt_map.get(condition_lower, {}).get("relevance", "Unsure")
+    if relevance in ["Relevant", "Likely Relevant"]:
+        return relevance
+
+    # Fallback to Google search for gene therapy presence
+    query = f"is there a gene therapy for {condition}"
+    google_search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+    return f"Check Google: {google_search_url}"
+
+# -------------------------------
+# Contact email scraper
 # -------------------------------
 def extract_email(url):
     try:
@@ -216,7 +237,7 @@ def extract_email(url):
         return ""
 
 # -------------------------------
-# 6. Streamlit app flow
+# Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
@@ -253,16 +274,11 @@ if uploaded_file:
             str(record.get("Brief Summary", ""))
         ])
 
-        suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested Infant Inclusion: **{suggested_infant}**")
+        suggested_infant = assess_infant_inclusion(study_texts, condition, age_map)
+        st.caption(f"🧒 Suggested infant inclusion: **{suggested_infant}**")
 
-        suggested_cgt = assess_cgt_relevance(condition, study_texts)
-        st.caption(f"🧬 Suggested CGT Relevance: **{suggested_cgt}**")
-
-        therapy_links = check_gene_cell_therapy(condition)
-        st.markdown("🔗 **Gene/Cell Therapy Existence Links:**")
-        for l in therapy_links:
-            st.markdown(f"- [{l['title']}]({l['link']})")
+        suggested_cgt = assess_cgt_relevance(condition)
+        st.caption(f"🧬 Suggested CGT relevance: **{suggested_cgt}**")
 
         email = st.text_input("Contact email", extract_email(record["Web site"]))
 
@@ -295,7 +311,6 @@ if uploaded_file:
             st.success("✅ Saved!")
 
         if st.button("⬇️ Export Updated Excel"):
-            from io import BytesIO
-            output = BytesIO()
-            df.to_excel(output, index=False, engine='openpyxl')
-            st.download_button("⬇️ Download File", output, file_name="updated_registry_review.xlsx")
+            df.to_excel("updated_registry_review.xlsx", index=False)
+            with open("updated_registry_review.xlsx", "rb") as f:
+                st.download_button("⬇️ Download File", f, file_name="updated_registry_review.xlsx")
