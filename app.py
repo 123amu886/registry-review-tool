@@ -30,38 +30,62 @@ age_map = load_age_mapping()
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
 
-    # Extract all ages with positions
-    age_pattern = re.compile(r"(\d+)\s*(month|year)s?")
-    all_ages = [(int(m.group(1)), m.group(2), m.start()) for m in age_pattern.finditer(text_lower)]
-
-    min_age_months = None
-    if all_ages:
-        months_list = [age * 12 if unit.startswith("year") else age for age, unit, _ in all_ages]
-        min_age_months = min(months_list)
-
-    # 1. Explicit exclusions (highest precedence)
+    # 1. Explicit exclusion phrases (highest priority)
     if re.search(r"(no infants|excluding infants|does not include infants|infants excluded)", text_lower):
         return "Does not include infants"
 
-    # 2. Minimum age logic overrides
+    # 2. Extract minimum ages explicitly mentioned (phrases like "from 14 years", "minimum age 2 years", etc.)
+    min_age_months = None
+
+    min_age_patterns = [
+        r"from\s+(\d+)\s*(year|month)s?",
+        r"minimum age\s*[:=]?\s*(\d+)\s*(year|month)s?",
+        r"age\s*>\s*(\d+)\s*(year|month)s?",
+        r"age\s*>=\s*(\d+)\s*(year|month)s?"
+    ]
+
+    for pattern in min_age_patterns:
+        matches = re.findall(pattern, text_lower)
+        if matches:
+            for val, unit in matches:
+                val = int(val)
+                val_months = val * 12 if unit.startswith("year") else val
+                if (min_age_months is None) or (val_months < min_age_months):
+                    min_age_months = val_months
+
+    # 3. Extract maximum ages explicitly (e.g., "up to 36 months", "less than 2 years")
+    max_age_months = None
+
+    max_age_patterns = [
+        r"up to\s*(\d+)\s*(year|month)s?",
+        r"less than\s*(\d+)\s*(year|month)s?",
+        r"<\s*(\d+)\s*(year|month)s?"
+    ]
+
+    for pattern in max_age_patterns:
+        matches = re.findall(pattern, text_lower)
+        if matches:
+            for val, unit in matches:
+                val = int(val)
+                val_months = val * 12 if unit.startswith("year") else val
+                if (max_age_months is None) or (val_months > max_age_months):
+                    max_age_months = val_months
+
+    # 4. Handle "up to" phrase: If present and no min age or min_age <= 24 months -> Likely include infants
+    if "up to" in text_lower:
+        if min_age_months is None or min_age_months <= 24:
+            return "Likely to include infants"
+
+    # 5. Check if minimum age is greater than 24 months (2 years) => Does not include infants
     if min_age_months is not None:
         if min_age_months > 24:
             return "Does not include infants"
         elif min_age_months == 24:
             return "Unlikely to include infants but possible"
-        # else, min_age_months <=24: continue checks below
 
-    # 3. "up to" phrase handling (Likely include infants if no min age or min_age <= 24)
-    if "up to" in text_lower:
-        if min_age_months is None or min_age_months <= 24:
-            return "Likely to include infants"
-
-    # 4. Include infants phrases with strict word boundaries
+    # 6. Include infants patterns (only check if min age ≤ 24 months or not specified)
     include_patterns = [
         r"\bfrom\s*0\b",
-        r"\bfrom\s*6\s*months\b",
-        r"\bfrom\s*12\s*months\b",
-        r"\bfrom\s*1\s*year\b",
         r"\bstarting at birth\b",
         r"\bnewborn\b",
         r"\binfants?\b",
@@ -73,24 +97,24 @@ def assess_infant_inclusion(text, condition):
         r"0[-\s]*24\s*months",
         r"\b12\s*months\b",
         r"\b18\s*months\b",
-        r"\b1\s*year\b"
+        r"\b1\s*year\b",
+        r"\b6\s*months\b",
+        r"\bfrom\s*6\s*months\b",
+        r"\bfrom\s*12\s*months\b",
+        r"\bfrom\s*1\s*year\b"
     ]
 
     for pattern in include_patterns:
-        for match in re.finditer(pattern, text_lower):
-            start, end = match.span()
-            before = text_lower[start-1] if start > 0 else " "
-            after = text_lower[end] if end < len(text_lower) else " "
-            if (not before.isdigit()) and (not after.isdigit()):
-                return "Include infants"
+        if re.search(pattern, text_lower):
+            return "Include infants"
 
-    # 5. Onset age mapping fallback
+    # 7. Use onset mapping fallback if no direct clues
     onset = age_map.get(condition.lower(), "").lower()
     likely_phrases = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
     if any(x in onset for x in likely_phrases):
         return "Likely to include infants"
 
-    # 6. Default fallback
+    # 8. If none of above, uncertain
     return "Uncertain"
 
 # -------------------------------
