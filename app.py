@@ -30,91 +30,94 @@ age_map = load_age_mapping()
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
 
-    # 1. Explicit exclusion phrases (highest priority)
-    if re.search(r"(no infants|excluding infants|does not include infants|infants excluded)", text_lower):
-        return "Does not include infants"
-
-    # 2. Extract minimum ages explicitly mentioned (phrases like "from 14 years", "minimum age 2 years", etc.)
-    min_age_months = None
-
-    min_age_patterns = [
-        r"from\s+(\d+)\s*(year|month)s?",
-        r"minimum age\s*[:=]?\s*(\d+)\s*(year|month)s?",
-        r"age\s*>\s*(\d+)\s*(year|month)s?",
-        r"age\s*>=\s*(\d+)\s*(year|month)s?"
+    # Explicit exclusion phrases (highest priority)
+    exclusion_phrases = [
+        r"no infants",
+        r"excluding infants",
+        r"infants excluded",
+        r"does not include infants",
+        r"minimum age\s*[>≥]\s*2\s*years",
+        r"minimum age\s*[>≥]\s*24\s*months"
     ]
+    for phrase in exclusion_phrases:
+        if re.search(phrase, text_lower):
+            return "Does not include infants"
 
+    # Extract minimum age in months (if any)
+    min_age_months = None
+    min_age_patterns = [
+        r"minimum age\s*[:=]?\s*(\d+)\s*(year|month)s?",
+        r"age\s*[>≥]\s*(\d+)\s*(year|month)s?",
+        r"from\s*(\d+)\s*(year|month)s?"
+    ]
     for pattern in min_age_patterns:
         matches = re.findall(pattern, text_lower)
-        if matches:
-            for val, unit in matches:
-                val = int(val)
-                val_months = val * 12 if unit.startswith("year") else val
-                if (min_age_months is None) or (val_months < min_age_months):
-                    min_age_months = val_months
+        for val, unit in matches:
+            val = int(val)
+            months = val * 12 if unit.startswith("year") else val
+            if min_age_months is None or months < min_age_months:
+                min_age_months = months
 
-    # 3. Extract maximum ages explicitly (e.g., "up to 36 months", "less than 2 years")
+    # Check for "up to" phrase with possible max age (in months)
     max_age_months = None
-
     max_age_patterns = [
         r"up to\s*(\d+)\s*(year|month)s?",
         r"less than\s*(\d+)\s*(year|month)s?",
         r"<\s*(\d+)\s*(year|month)s?"
     ]
-
     for pattern in max_age_patterns:
         matches = re.findall(pattern, text_lower)
-        if matches:
-            for val, unit in matches:
-                val = int(val)
-                val_months = val * 12 if unit.startswith("year") else val
-                if (max_age_months is None) or (val_months > max_age_months):
-                    max_age_months = val_months
+        for val, unit in matches:
+            val = int(val)
+            months = val * 12 if unit.startswith("year") else val
+            if max_age_months is None or months > max_age_months:
+                max_age_months = months
 
-    # 4. Handle "up to" phrase: If present and no min age or min_age <= 24 months -> Likely include infants
-    if "up to" in text_lower:
-        if min_age_months is None or min_age_months <= 24:
-            return "Likely to include infants"
-
-    # 5. Check if minimum age is greater than 24 months (2 years) => Does not include infants
-    if min_age_months is not None:
-        if min_age_months > 24:
-            return "Does not include infants"
-        elif min_age_months == 24:
-            return "Unlikely to include infants but possible"
-
-    # 6. Include infants patterns (only check if min age ≤ 24 months or not specified)
-    include_patterns = [
-        r"\bfrom\s*0\b",
-        r"\bstarting at birth\b",
-        r"\bnewborn\b",
-        r"\binfants?\b",
-        r"less than\s*(12|18|24)\s*months",
-        r"<\s*(12|18|24)\s*months",
-        r"<\s*(1|2)\s*years?",
-        r"0[-\s]*2\s*years",
-        r"0[-\s]*18\s*months",
-        r"0[-\s]*24\s*months",
-        r"\b12\s*months\b",
-        r"\b18\s*months\b",
-        r"\b1\s*year\b",
-        r"\b6\s*months\b",
-        r"\bfrom\s*6\s*months\b",
-        r"\bfrom\s*12\s*months\b",
-        r"\bfrom\s*1\s*year\b"
+    # Include infants if any direct matching phrase
+    include_phrases = [
+        r"\bfrom 0\b",
+        r"starting at birth",
+        r"newborn",
+        r"infants?",
+        r"less than (12|18|24) months",
+        r"<(12|18|24) months",
+        r"<(1|2) years",
+        r"up to 18 months",
+        r"up to 2 years",
+        r"0[-\s]*2 years",
+        r"0[-\s]*18 months",
+        r"0[-\s]*24 months",
+        r"from 1 year",
+        r"from 12 months",
+        r"\b12 months\b",
+        r"\b18 months\b",
+        r"\b1 year\b"
     ]
-
-    for pattern in include_patterns:
-        if re.search(pattern, text_lower):
+    for phrase in include_phrases:
+        if re.search(phrase, text_lower):
             return "Include infants"
 
-    # 7. Use onset mapping fallback if no direct clues
+    # Likely to include infants if:
+    # - max age phrase exists with 'up to' and no min age or min age ≤ 18 months
+    if max_age_months is not None and "up to" in text_lower:
+        if min_age_months is None or min_age_months <= 18:
+            return "Likely to include infants"
+
+    # Likely to include infants by condition onset mapping
     onset = age_map.get(condition.lower(), "").lower()
-    likely_phrases = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
-    if any(x in onset for x in likely_phrases):
+    likely_terms = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
+    if any(term in onset for term in likely_terms):
         return "Likely to include infants"
 
-    # 8. If none of above, uncertain
+    # Unlikely to include infants but possible if min age exactly 24 months (2 years)
+    if min_age_months == 24:
+        return "Unlikely to include infants but possible"
+
+    # Does not include infants if min age > 24 months
+    if min_age_months is not None and min_age_months > 24:
+        return "Does not include infants"
+
+    # Otherwise uncertain
     return "Uncertain"
 
 # -------------------------------
