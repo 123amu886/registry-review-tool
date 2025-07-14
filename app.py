@@ -21,8 +21,15 @@ def load_age_mapping():
     with open("infant_mapping.json", "r") as f:
         return json.load(f)
 
+@st.cache_data
+def load_pipeline_cgt_conditions():
+    with open("pipeline_cgt_conditions.json", "r") as f:
+        data = json.load(f)
+    return data.get("conditions", [])
+
 cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
+pipeline_cgt_conditions = load_pipeline_cgt_conditions()
 
 # -------------------------------
 # 2. Infant inclusion patterns
@@ -134,7 +141,7 @@ def check_clinicaltrials_gov(condition):
             "expr": f"{condition} gene therapy",
             "fields": "NCTId,BriefTitle,Phase,OverallStatus",
             "min_rnk": 1,
-            "max_rnk": 3,
+            "max_rnk": 5,
             "fmt": "json"
         }
         search_r = requests.get(search_url, params=search_params, timeout=10)
@@ -197,7 +204,7 @@ def check_clinicaltrials_gov(condition):
         return []
 
 # -------------------------------
-# 6. Improved CGT relevance logic with Google search
+# 6. Improved CGT relevance logic with pipeline and Google search
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
@@ -212,6 +219,20 @@ def assess_cgt_relevance_and_links(text, condition):
     if studies:
         found_study = True
         links.extend(studies)
+
+    # If condition is in pipeline CGT conditions list
+    if any(p in condition_lower for p in pipeline_cgt_conditions):
+        # If any ClinicalTrials.gov studies with Phase I or higher, mark Relevant
+        has_phase_I_or_higher = any(
+            s['phase'] != "N/A" and
+            s['phase'].lower().startswith(('phase 1', 'phase i', 'phase ii', 'phase 2', 'phase iii', 'phase 3', 'phase iv', 'phase 4', 'approved'))
+            for s in studies
+        )
+        if has_phase_I_or_higher:
+            relevance = "Relevant"
+        else:
+            relevance = "Likely Relevant"
+        return relevance, links
 
     # If mapped as Relevant or Likely Relevant and study found
     if relevance in ["Relevant", "Likely Relevant"] and found_study:
