@@ -27,59 +27,73 @@ age_map = load_age_mapping()
 # -------------------------------
 # 2. Refined infant inclusion logic
 # -------------------------------
-def assess_infant_inclusion(text, condition):
-    text_lower = text.lower() if pd.notna(text) else ""
+import re
 
-    # Check explicit exclusion phrases first
-    exclusion_patterns = [
-        r"no infants",
-        r"excluding infants",
-        r"infants excluded",
-        r"does not include infants",
-        r"minimum age\s*[>≥]\s*2\s*years",
-        r"minimum age\s*[>≥]\s*24\s*months"
-    ]
-    for pattern in exclusion_patterns:
-        if re.search(pattern, text_lower):
-            return "Does not include infants"
+def extract_ages(text):
+    """
+    Extract min and max age (in months) from text.
+    Returns tuple (min_age_months, max_age_months), either can be None if not found.
+    """
+    min_age = None
+    max_age = None
 
-    # Parse minimum age in months
-    min_age_months = None
-    age_patterns = [
+    # Patterns for min age (e.g. "minimum age 14 years", "age >= 2 years", "from 6 months", "14 years and older")
+    min_patterns = [
         r"minimum age\s*[:=]?\s*(\d+)\s*(year|month)s?",
         r"age\s*[>≥]\s*(\d+)\s*(year|month)s?",
         r"from\s*(\d+)\s*(year|month)s?",
-        r"^(\d+)\s*(year|month)s?\s*and older",  # e.g., "14 years and older"
+        r"(\d+)\s*(year|month)s?\s*and older",
+        r"starting at\s*(\d+)\s*(year|month)s?"
     ]
-    for pattern in age_patterns:
-        matches = re.findall(pattern, text_lower)
-        for val, unit in matches:
-            val = int(val)
-            months = val * 12 if unit.startswith("year") else val
-            if (min_age_months is None) or (months < min_age_months):
-                min_age_months = months
 
-    # Check for "up to" phrasing with max age (if relevant)
-    max_age_months = None
-    max_age_patterns = [
+    # Patterns for max age (e.g. "up to 18 months", "< 2 years", "less than 24 months")
+    max_patterns = [
         r"up to\s*(\d+)\s*(year|month)s?",
-        r"less than\s*(\d+)\s*(year|month)s?",
-        r"<\s*(\d+)\s*(year|month)s?"
+        r"<\s*(\d+)\s*(year|month)s?",
+        r"less than\s*(\d+)\s*(year|month)s?"
     ]
-    for pattern in max_age_patterns:
-        matches = re.findall(pattern, text_lower)
-        for val, unit in matches:
-            val = int(val)
-            months = val * 12 if unit.startswith("year") else val
-            if (max_age_months is None) or (months > max_age_months):
-                max_age_months = months
 
-    # If any direct infant inclusion phrase present, classify immediately
-    direct_include_phrases = [
+    for pattern in min_patterns:
+        for match in re.finditer(pattern, text, flags=re.I):
+            val, unit = int(match.group(1)), match.group(2).lower()
+            months = val * 12 if unit.startswith("year") else val
+            if (min_age is None) or (months < min_age):
+                min_age = months
+
+    for pattern in max_patterns:
+        for match in re.finditer(pattern, text, flags=re.I):
+            val, unit = int(match.group(1)), match.group(2).lower()
+            months = val * 12 if unit.startswith("year") else val
+            if (max_age is None) or (months > max_age):
+                max_age = months
+
+    return min_age, max_age
+
+def assess_infant_inclusion(text, condition, age_map):
+    """
+    Determines infant inclusion category based on eligibility text and condition.
+    """
+
+    text_lower = text.lower() if text else ""
+
+    # Check explicit exclusions first
+    exclusion_phrases = [
+        r"no infants",
+        r"excluding infants",
+        r"infants excluded",
+        r"does not include infants"
+    ]
+    if any(re.search(p, text_lower) for p in exclusion_phrases):
+        return "Does not include infants"
+
+    min_age, max_age = extract_ages(text_lower)
+
+    # Direct infant inclusion phrases
+    infant_phrases = [
         r"\bfrom 0\b",
         r"starting at birth",
         r"newborn",
-        r"infants?",
+        r"\binfants?\b",
         r"less than (12|18|24) months",
         r"<(12|18|24) months",
         r"<(1|2) years",
@@ -94,34 +108,33 @@ def assess_infant_inclusion(text, condition):
         r"\b18 months\b",
         r"\b1 year\b"
     ]
-    for phrase in direct_include_phrases:
-        if re.search(phrase, text_lower):
-            # Only return Include infants if min age <= 18 months or no min age info
-            if min_age_months is None or min_age_months <= 18:
-                return "Include infants"
 
-    # If max age phrase with 'up to' exists AND min age is None or ≤18 months
-    if max_age_months is not None and "up to" in text_lower:
-        if min_age_months is None or min_age_months <= 18:
+    # If any infant phrase AND min age ≤ 18 months or unknown min age
+    if any(re.search(p, text_lower) for p in infant_phrases):
+        if min_age is None or min_age <= 18:
+            return "Include infants"
+
+    # If "up to" present and min age unknown or ≤ 18 months -> Likely include infants
+    if "up to" in text_lower:
+        if min_age is None or min_age <= 18:
             return "Likely to include infants"
 
-    # Check age_map onset for likely infants
-    onset = age_map.get(condition.lower(), "").lower()
+    # Use onset info for likely inclusion
+    onset = age_map.get(condition.lower(), "").lower() if age_map else ""
     likely_terms = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
     if any(term in onset for term in likely_terms):
         return "Likely to include infants"
 
-    # Unlikely if min age exactly 24 months (2 years)
-    if min_age_months == 24:
+    # Unlikely if min age == 24 months (2 years)
+    if min_age == 24:
         return "Unlikely to include infants but possible"
 
-    # Does not include infants if min age > 24 months
-    if min_age_months is not None and min_age_months > 24:
+    # Does not include if min age > 24 months
+    if min_age is not None and min_age > 24:
         return "Does not include infants"
 
-    # If no info or cannot decide
+    # Otherwise, uncertain
     return "Uncertain"
-
 
 # -------------------------------
 # 3. CGT relevance logic
