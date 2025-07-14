@@ -47,23 +47,85 @@ include_patterns = [
 ]
 
 # -------------------------------
-# 3. Infant inclusion logic
+# 3. Extract min/max age
+# -------------------------------
+def extract_min_max_age(text):
+    min_age = None
+    max_age = None
+
+    min_patterns = [
+        r"minimum age\s*[:=]?\s*(\d+)\s*(year|month)",
+        r"from\s*(\d+)\s*(year|month)",
+        r"starting at\s*(\d+)\s*(year|month)",
+        r"age\s*[>≥]\s*(\d+)\s*(year|month)",
+        r"(\d+)\s*(year|month)s?\s*and older"
+    ]
+
+    max_patterns = [
+        r"maximum age\s*[:=]?\s*(\d+)\s*(year|month)",
+        r"up to\s*(\d+)\s*(year|month)",
+        r"<\s*(\d+)\s*(year|month)",
+        r"less than\s*(\d+)\s*(year|month)"
+    ]
+
+    for pattern in min_patterns:
+        for m in re.finditer(pattern, text, flags=re.I):
+            val, unit = int(m.group(1)), m.group(2).lower()
+            months = val * 12 if "year" in unit else val
+            if min_age is None or months < min_age:
+                min_age = months
+
+    for pattern in max_patterns:
+        for m in re.finditer(pattern, text, flags=re.I):
+            val, unit = int(m.group(1)), m.group(2).lower()
+            months = val * 12 if "year" in unit else val
+            if max_age is None or months > max_age:
+                max_age = months
+
+    return min_age, max_age
+
+# -------------------------------
+# 4. Infant inclusion logic
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
+    min_age, max_age = extract_min_max_age(text_lower)
+
+    # 1. Explicit inclusion patterns
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
 
+    # 2. Include infants if min_age <= 24 months
+    if min_age is not None and min_age <= 24:
+        return "Include infants"
+
+    # 3. Likely to include infants by condition onset
     onset = age_map.get(condition.lower(), "").lower()
     if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
         return "Likely to include infants"
-    if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
+
+    # 4. Likely to include infants if 'up to' and no min_age or min_age <= 18 months
+    if "up to" in text_lower and (min_age is None or min_age <= 18):
+        return "Likely to include infants"
+
+    # 5. Unlikely but possible if min_age exactly 24 months (2 years)
+    if min_age in [24, 25]:
         return "Unlikely to include infants but possible"
+
+    # 6. Does not include infants if min_age > 24 months
+    if min_age is not None and min_age > 24:
+        return "Does not include infants"
+
+    # 7. Does not include infants if onset mapping implies older population
+    if min_age is None and any(x in onset for x in ["child", "adult", "adolescent", "3 years", "4 years", "5 years"]):
+        return "Does not include infants"
+
+    # 8. Uncertain as fallback
     return "Uncertain"
 
 # -------------------------------
-# 4. ClinicalTrials.gov API with contacts and locations
+# 5. ClinicalTrials.gov API with contacts and locations
 # -------------------------------
 def check_clinicaltrials_gov(condition):
     try:
@@ -135,7 +197,7 @@ def check_clinicaltrials_gov(condition):
         return []
 
 # -------------------------------
-# 5. Improved CGT relevance logic with Google search
+# 6. Improved CGT relevance logic with Google search
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
@@ -191,7 +253,7 @@ def assess_cgt_relevance_and_links(text, condition):
     return relevance, links
 
 # -------------------------------
-# 6. Contact email scraper
+# 7. Contact email scraper
 # -------------------------------
 def extract_email(url):
     try:
@@ -207,7 +269,7 @@ def extract_email(url):
         return ""
 
 # -------------------------------
-# 7. Streamlit app flow
+# 8. Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
