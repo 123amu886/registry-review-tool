@@ -30,7 +30,7 @@ age_map = load_age_mapping()
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
 
-    # Extract minimum age in months if available
+    # Extract all age mentions (min and max)
     ages = re.findall(r"(\d+)\s*(month|year)", text_lower)
     min_age_months = None
     if ages:
@@ -40,7 +40,11 @@ def assess_infant_inclusion(text, condition):
             if min_age_months is None or age_in_months < min_age_months:
                 min_age_months = age_in_months
 
-    # Categorize based on minimum age before regex-based inclusion
+    # "Up to" logic overrides to Likely to include infants
+    if "up to" in text_lower:
+        return "Likely to include infants"
+
+    # Minimum age classification
     if min_age_months is not None:
         if min_age_months >= 24:
             if min_age_months == 24:
@@ -48,7 +52,7 @@ def assess_infant_inclusion(text, condition):
             else:
                 return "Does not include infants"
 
-    # Include infants patterns with word boundaries
+    # Adjusted include infants patterns
     include_patterns = [
         r"\bfrom\s*0\b",
         r"\bfrom\s*6\s*months\b",
@@ -60,8 +64,6 @@ def assess_infant_inclusion(text, condition):
         r"less than\s*(12|18|24)\s*months",
         r"<\s*(12|18|24)\s*months",
         r"<\s*(1|2)\s*years?",
-        r"up to\s*18\s*months",
-        r"up to\s*2\s*years",
         r"0[-\s]*2\s*years",
         r"0[-\s]*18\s*months",
         r"0[-\s]*24\s*months",
@@ -69,6 +71,12 @@ def assess_infant_inclusion(text, condition):
         r"\b18\s*months\b",
         r"\b1\s*year\b"
     ]
+
+    # Prevent "14 years" false match
+    if re.search(r"(^|\D)1\s*year(\D|$)", text_lower):
+        return "Include infants"
+
+    # Regex-based inclusion matching
     if any(re.search(p, text_lower) for p in include_patterns):
         return "Include infants"
 
@@ -76,12 +84,6 @@ def assess_infant_inclusion(text, condition):
     onset = age_map.get(condition.lower(), "").lower()
     likely_phrases = ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]
     if any(x in onset for x in likely_phrases):
-        return "Likely to include infants"
-
-    # "Up to" patterns starting from infant-related minimums
-    if re.search(r"(up to.*months|up to.*years)", text_lower) and any(
-        re.search(p, text_lower) for p in [r"\bfrom\s*0\b", r"\bfrom\s*6\s*months\b", r"\bfrom\s*12\s*months\b", r"\bfrom\s*1\s*year\b", r"\bfrom\s*18\s*months\b"]
-    ):
         return "Likely to include infants"
 
     # Explicit exclusion
