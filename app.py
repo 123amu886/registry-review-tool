@@ -1,27 +1,25 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
-import re
 import json
+import re
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
 st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
 
 # -------------------------------
-# 1. Load JSON mapping files with lowercase keys
+# 1. Load JSON mapping files
 # -------------------------------
 @st.cache_data
 def load_cgt_mapping():
     with open("cgt_mapping.json", "r") as f:
-        raw_map = json.load(f)
-        return {k.lower(): v for k, v in raw_map.items()}
+        return json.load(f)
 
 @st.cache_data
 def load_pipeline_cgt_mapping():
     with open("pipeline_cgt_mapping.json", "r") as f:
-        raw_map = json.load(f)
-        return {k.lower(): v for k, v in raw_map.items()}
+        return json.load(f)
 
 @st.cache_data
 def load_age_mapping():
@@ -33,7 +31,7 @@ pipeline_map = load_pipeline_cgt_mapping()
 age_map = load_age_mapping()
 
 # -------------------------------
-# 2. Infant inclusion patterns and extraction
+# 2. Infant inclusion patterns
 # -------------------------------
 include_patterns = [
     r"(from|starting at|age)\s*0",
@@ -46,16 +44,15 @@ include_patterns = [
     r"up to\s*18\s*months",
     r"up to\s*2\s*years",
     r"0[-\s]*2\s*years",
-    r"0[-\s]*24\s*months",
-    r"from\s*1\s*year",
-    r"from\s*12\s*months",
-    r">\s*12\s*months",
-    r">\s*18\s*months",
-    r">\s*1\s*year"
+    r"0[-\s]*24\s*months"
 ]
 
+# -------------------------------
+# 3. Extract min/max age
+# -------------------------------
 def extract_min_max_age(text):
-    min_age, max_age = None, None
+    min_age = None
+    max_age = None
 
     min_patterns = [
         r"minimum age\s*[:=]?\s*(\d+)\s*(year|month)",
@@ -64,6 +61,7 @@ def extract_min_max_age(text):
         r"age\s*[>≥]\s*(\d+)\s*(year|month)",
         r"(\d+)\s*(year|month)s?\s*and older"
     ]
+
     max_patterns = [
         r"maximum age\s*[:=]?\s*(\d+)\s*(year|month)",
         r"up to\s*(\d+)\s*(year|month)",
@@ -87,6 +85,9 @@ def extract_min_max_age(text):
 
     return min_age, max_age
 
+# -------------------------------
+# 4. Infant inclusion logic
+# -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
     min_age, max_age = extract_min_max_age(text_lower)
@@ -117,38 +118,25 @@ def assess_infant_inclusion(text, condition):
     return "Uncertain"
 
 # -------------------------------
-# 3. CGT relevance assessment
+# 5. CGT relevance logic
 # -------------------------------
-def assess_cgt_relevance_and_links(text, condition):
+def assess_cgt_relevance(condition):
     condition_lower = condition.lower()
-    links = []
 
-    if condition_lower in cgt_map:
-        relevance = "Relevant"
-    elif condition_lower in pipeline_map:
-        relevance = "Likely Relevant"
-    else:
-        # fallback keyword-based logic
-        cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
-                        "gene editing", "gene correction", "gene silencing", "reprogramming",
-                        "cgt", "c&gt", "car-t therapy"]
-        text_lower = text.lower() if pd.notna(text) else ""
-        if any(k in text_lower for k in cgt_keywords):
-            relevance = "Likely Relevant"
-        else:
-            relevance = "Unsure"
+    # Approved CGT conditions
+    approved_relevance = cgt_map.get(condition_lower)
+    if approved_relevance:
+        return "Relevant"
 
-    # Always add Google & PubMed fallback links
-    google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
-    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
+    # Pipeline CGT conditions
+    pipeline_relevance = pipeline_map.get(condition_lower)
+    if pipeline_relevance:
+        return "Likely Relevant"
 
-    links.append({"title": "Google Search", "link": google_query})
-    links.append({"title": "PubMed Search", "link": pubmed_url})
-
-    return relevance, links
+    return "Unsure"
 
 # -------------------------------
-# 4. Streamlit app flow
+# 6. Streamlit app flow
 # -------------------------------
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
@@ -186,15 +174,12 @@ if uploaded_file:
         ])
 
         suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested infant inclusion: **{suggested_infant}**")
+        st.caption(f"🧒 Suggested: **{suggested_infant}**")
 
-        suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
-        st.caption(f"🧬 Suggested CGT relevance: **{suggested_cgt}**")
+        suggested_cgt = assess_cgt_relevance(condition)
+        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
 
-        if study_links:
-            st.markdown("🔗 **Related Searches:**")
-            for s in study_links:
-                st.markdown(f"- [{s['title']}]({s['link']})")
+        email = st.text_input("Contact email", "")
 
         pop_choice = st.radio("Infant Population", [
             "Include infants",
@@ -217,6 +202,7 @@ if uploaded_file:
 
         if st.button("💾 Save"):
             original_index = df_filtered.index[record_index]
+            df.at[original_index, "contact information"] = email
             df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
             df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
             df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
