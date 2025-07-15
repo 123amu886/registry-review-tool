@@ -1,0 +1,169 @@
+{
+  "hepatitis": {
+    "synonyms": [],
+    "related_conditions": [],
+    "cgt_relevance": "unsure"
+  },
+  "adnexal mass": {
+    "synonyms": [],
+    "related_conditions": [
+      "adnexal tumor",
+      "adnexal cyst",
+      "adnexal masses in young girls and adolescents"
+    ],
+    "cgt_relevance": "unsure"
+  },
+  "pots": {
+    "synonyms": [
+      "postural orthostatic tachycardia syndrome"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "unsure"
+  },
+  "alopecia areata": {
+    "synonyms": [],
+    "related_conditions": [],
+    "cgt_relevance": "unsure"
+  },
+  "cystic fibrosis": {
+    "synonyms": [
+      "cf"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "approved"
+  },
+  "developmental dysphasia": {
+    "synonyms": [],
+    "related_conditions": [
+      "epileptic encephalopathy, childhood-onset",
+      "x-linked intellectual disability"
+    ],
+    "cgt_relevance": "pipeline"
+  },
+  "cerebral palsy": {
+    "synonyms": [
+      "cp"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "unsure"
+  },
+  "duchenne muscular dystrophy": {
+    "synonyms": [
+      "dmd"
+    ],
+    "related_conditions": [
+      "natural history",
+      "motor function; retardation",
+      "muscular dystrophy, duchenne"
+    ],
+    "cgt_relevance": "approved"
+  },
+  "spinal muscular atrophy": {
+    "synonyms": [
+      "sma"
+    ],
+    "related_conditions": [
+      "natural history of type 1 spinal muscular atrophy (sma)",
+      "muscular atrophy, spinal"
+    ],
+    "cgt_relevance": "approved"
+  },
+  "inborn errors of metabolism": {
+    "synonyms": [
+      "iem"
+    ],
+    "related_conditions": [
+      "pregnancy",
+      "acidemias"
+    ],
+    "cgt_relevance": "pipeline"
+  },
+  "immune thrombocytopenia": {
+    "synonyms": [
+      "itp"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "pipeline"
+  },
+  "x-linked myotubular myopathy": {
+    "synonyms": [
+      "xlmtm"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "pipeline"
+  },
+  "sanfilippo syndrome type b": {
+    "synonyms": [],
+    "related_conditions": [],
+    "cgt_relevance": "pipeline"
+  },
+  "sickle cell disease": {
+    "synonyms": [
+      "scd"
+    ],
+    "related_conditions": [
+      "stroke",
+      "neurologic manifestations",
+      "neurological morbidity",
+      "sickle cell anemia in children",
+      "sickle cell anemia"
+    ],
+    "cgt_relevance": "approved"
+  },
+  "prader-willi syndrome": {
+    "synonyms": [
+      "pws"
+    ],
+    "related_conditions": [
+      "obesity"
+    ],
+    "cgt_relevance": "unsure"
+  },
+  "angelman syndrome": {
+    "synonyms": [
+      "as"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "pipeline"
+  },
+  "autism spectrum disorders": {
+    "synonyms": [
+      "asd"
+    ],
+    "related_conditions": [
+      "seizures"
+    ],
+    "cgt_relevance": "unsure"
+  },
+  "type 1 diabetes mellitus": {
+    "synonyms": [
+      "t1dm"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "unsure"
+  },
+  "non-alcoholic fatty liver disease": {
+    "synonyms": [
+      "nafld"
+    ],
+    "related_conditions": [
+      "non-alcoholic fatty liver",
+      "non-alcoholic steatohepatitis"
+    ],
+    "cgt_relevance": "unsure"
+  },
+  "charcot marie tooth disease": {
+    "synonyms": [
+      "cmt"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "pipeline"
+  },
+  "neurofibromatosis type 1": {
+    "synonyms": [
+      "nf1"
+    ],
+    "related_conditions": [],
+    "cgt_relevance": "pipeline"
+  }
+}
