@@ -1,18 +1,18 @@
 {
-  "conditions": [
-    "pompe disease",
-    "methylmalonic acidemia",
-    "mma",
-    "ornithine transcarbamylase deficiency",
-    "otc deficiency",
-    "cystinosis",
-    "phenylketonuria",
-    "pku",
-    "glycogen storage disease",
-    "argininemia",
-    "urea cycle disorder",
-    "metachromatic leukodystrophy",
-    "mld",
-    "gauchers disease"
-  ]
+  "spinal muscular atrophy": {"relevance": "Relevant", "modality": "Gene therapy", "status": "FDA approved", "therapy": "Zolgensma"},
+  "duchenne muscular dystrophy": {"relevance": "Likely Relevant", "modality": "Gene therapy", "status": "Phase I", "therapy": "EXONDYS 51 pipeline"},
+  "hemophilia a": {"relevance": "Relevant", "modality": "Gene therapy", "status": "FDA approved", "therapy": "Roctavian"},
+  "hemophilia b": {"relevance": "Relevant", "modality": "Gene therapy", "status": "FDA approved", "therapy": "Hemgenix"},
+  "leber congenital amaurosis": {"relevance": "Relevant", "modality": "Gene therapy", "status": "FDA approved", "therapy": "Luxturna"},
+  "metachromatic leukodystrophy": {"relevance": "Relevant", "modality": "Cell therapy", "status": "EMA approved", "therapy": "Libmeldy"},
+  "phenylketonuria": {"relevance": "Likely Relevant", "modality": "Gene therapy", "status": "Phase I/II", "therapy": "BMN 307"},
+  "pompe disease": {"relevance": "Likely Relevant", "modality": "Gene therapy", "status": "Preclinical", "therapy": "AAV-GAA liver-directed"},
+  "methylmalonic acidemia": {"relevance": "Likely Relevant", "modality": "Gene therapy", "status": "Preclinical", "therapy": "AAV-MMA editing"},
+  "ornithine transcarbamylase deficiency": {"relevance": "Likely Relevant", "modality": "Gene therapy", "status": "Preclinical", "therapy": "AAV-OTC editing"},
+  "cystinosis": {"relevance": "Likely Relevant", "modality": "Cell therapy", "status": "Phase I/II", "therapy": "DFT383 ex vivo HSC gene therapy"},
+  "ada-scid": {"relevance": "Relevant", "modality": "Cell therapy", "status": "EMA approved", "therapy": "Strimvelis"},
+  "aromatic l-amino acid decarboxylase deficiency": {"relevance": "Relevant", "modality": "Gene therapy", "status": "FDA/EMA approved", "therapy": "Upstaza"},
+  "wiskott-aldrich syndrome": {"relevance": "Likely Relevant", "modality": "Cell therapy", "status": "Phase I/II", "therapy": "OTL-103 ex vivo HSC"},
+  "cerebral palsy": {"relevance": "Likely Relevant", "modality": "Cell therapy", "status": "Preclinical", "therapy": "Neural stem cell"},
+  "rett syndrome": {"relevance": "Likely Relevant", "modality": "Gene therapy", "status": "Preclinical", "therapy": "AAV-MECP2"}
 }
