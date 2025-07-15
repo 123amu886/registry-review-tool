@@ -1,0 +1,48 @@
+[
+    {
+        "condition": "hemophilia",
+        "synonyms": [
+            "hemophilia a",
+            "hemophilia b",
+            "factor viii deficiency"
+        ],
+        "cgt_relevance": "Relevant (Approved CGT)",
+        "infant_inclusion": "Likely to include infants"
+    },
+    {
+        "condition": "immune thrombocytopenia",
+        "synonyms": [
+            "itp"
+        ],
+        "cgt_relevance": "Likely Relevant (Pipeline CGT)",
+        "infant_inclusion": "Unlikely to include infants but possible"
+    },
+    {
+        "condition": "hepatitis",
+        "synonyms": [
+            "viral hepatitis",
+            "hep a",
+            "hep b",
+            "hep c"
+        ],
+        "cgt_relevance": "Unsure",
+        "infant_inclusion": "Unlikely to include infants"
+    },
+    {
+        "condition": "spinal muscular atrophy",
+        "synonyms": [
+            "sma",
+            "type 1 sma"
+        ],
+        "cgt_relevance": "Relevant (Approved CGT)",
+        "infant_inclusion": "Likely to include infants"
+    },
+    {
+        "condition": "sanfilippo syndrome type b",
+        "synonyms": [
+            "mps iiib"
+        ],
+        "cgt_relevance": "Likely Relevant (Pipeline CGT)",
+        "infant_inclusion": "Likely to include infants"
+    }
+]
