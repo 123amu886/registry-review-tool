@@ -35,8 +35,8 @@ approved_cgt_map = load_approved_cgt()
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
-    
-    # 1. Check direct inclusion mentions of 0-24 months or 0-2 years
+
+    # 1. Check direct inclusion mentions
     include_patterns = [
         r"(from|starting at|age)\s*(0|birth|newborn|newborns|infant|infants)",
         r"(from|starting at|age)\s*0\s*(to|-)\s*(\d+)\s*(months?|years?)",
@@ -50,53 +50,56 @@ def assess_infant_inclusion(text, condition):
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
-    
-    # 2. Check for numeric age ranges: extract all age ranges from text and analyze lower bound
-    # Examples: "1 year to 15 years", "6 months - 45 years"
+
+    # 2. Check numeric age ranges (e.g. "16 years to 50 years", "6 months - 2 years")
     age_range_matches = re.findall(
         r"(\d+)\s*(months?|years?)\s*(to|-)\s*(\d+)\s*(months?|years?)", text_lower
     )
-    for lower_val, lower_unit, _, upper_val, upper_unit in age_range_matches:
-        lower_val = int(lower_val)
-        upper_val = int(upper_val)
-        # Convert months to years for comparison
-        if "month" in lower_unit:
-            lower_val_in_years = lower_val / 12
-        else:
-            lower_val_in_years = lower_val
-        
-        if "month" in upper_unit:
-            upper_val_in_years = upper_val / 12
-        else:
-            upper_val_in_years = upper_val
-        
-        # Lower bound between 0 and 2 years => Include or Likely
-        if 0 <= lower_val_in_years <= 2:
-            # If upper bound also ≤ 2 years or unspecified, "Include infants"
-            if upper_val_in_years <= 2:
-                return "Include infants"
+    if age_range_matches:
+        for lower_val, lower_unit, _, upper_val, upper_unit in age_range_matches:
+            lower_val = int(lower_val)
+            upper_val = int(upper_val)
+
+            # Convert months to years for comparison
+            if "month" in lower_unit:
+                lower_val_in_years = lower_val / 12
             else:
-                # Upper bound > 2 years but lower bound ≤ 2 => Likely to include infants
-                return "Likely to include infants"
-        # If lower bound ≥ 2 years, "Does not include infants"
-        elif lower_val_in_years >= 2:
+                lower_val_in_years = lower_val
+
+            if "month" in upper_unit:
+                upper_val_in_years = upper_val / 12
+            else:
+                upper_val_in_years = upper_val
+
+            if 0 <= lower_val_in_years <= 2:
+                if upper_val_in_years <= 2:
+                    return "Include infants"
+                else:
+                    return "Likely to include infants"
+            elif lower_val_in_years > 2:
+                return "Does not include infants"
+
+    # 3. If no ranges found, check for standalone ages (e.g., "16 years")
+    standalone_ages = re.findall(r"(\d+)\s*(months?|years?)", text_lower)
+    for val, unit in standalone_ages:
+        val = int(val)
+        val_in_years = val / 12 if "month" in unit else val
+        if val_in_years > 2:
             return "Does not include infants"
-    
-    # 3. Check explicit exclusion keywords
+
+    # 4. Explicit exclusions
     if re.search(r"(does not include infants|exclude infants|no infants|not include infants)", text_lower):
         return "Does not include infants"
-    
-    # 4. Check Age of onset mapping
+
+    # 5. Age of onset mapping
     onset = age_map.get(condition.lower(), "").lower()
     if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
         return "Likely to include infants"
     if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
         return "Unlikely to include infants but possible"
-    
-    # 5. If no clues, return uncertain
+
+    # 6. Default
     return "Uncertain"
-
-
 # -------------------------------
 # 3. ClinicalTrials.gov API
 # -------------------------------
