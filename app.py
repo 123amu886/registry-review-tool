@@ -28,73 +28,56 @@ def load_approved_cgt():
 
 cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
-approved_cgt_list = load_approved_cgt()
-
-# Transform approved_cgt_list to dict by condition (lowercase)
-approved_cgt_map = {}
-for item in approved_cgt_list:
-    cond = item["condition"].lower()
-    approved_cgt_map.setdefault(cond, []).append(item)
+approved_cgt_map = load_approved_cgt()
 
 # -------------------------------
 # 2. Infant inclusion logic
 # -------------------------------
 def assess_infant_inclusion(text, condition):
-    if not text:
-        return "Uncertain"
-    
-    text_lower = text.lower()
+    text_lower = text.lower() if pd.notna(text) else ""
 
     include_patterns = [
         r"(from|starting at|age)\s*0",
         r"(from|starting at)\s*birth",
         r"newborn",
         r"infants?",
-        r"less than\s*(12|18|24|36)\s*months",
-        r"<\s*(12|18|24|36)\s*months",
-        r"<\s*(1|2|3)\s*years?",
-        r"up to\s*(12|18|24|36)\s*months",
-        r"up to\s*(1|2|3)\s*years",
+        r"less than\s*(12|18|24)\s*months",
+        r"<\s*(12|18|24)\s*months",
+        r"<\s*(1|2)\s*years?",
+        r"up to\s*18\s*months",
+        r"up to\s*2\s*years",
         r"0[-\s]*2\s*years",
         r"0[-\s]*24\s*months",
-        r"^0\s*-\s*\d+\s*years",
-        r"0\s*to\s*\d+\s*years"
+        r"0\s*(to|-)\s*\d+\s*(years?|months?)",
+        r"(from|starting at)\s*1\s*(year|yr|years?)",
+        r"age\s*1\s*(year|yr|years?)"
     ]
 
+    # Direct "Include infants" if explicit mention
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
 
-    # Extract age ranges: e.g. "0 to 17 years", "1-50 years"
-    age_ranges = re.findall(r"(\d+)\s*(?:-|to)\s*(\d+)\s*(months|years?)", text_lower)
-    for low_str, high_str, unit in age_ranges:
-        low = int(low_str)
-        high = int(high_str)
-        if 'month' in unit:
-            low_years = low / 12
-            high_years = high / 12
-        else:
-            low_years = low
-            high_years = high
-
-        if 0 <= low_years <= 2:
-            return "Include infants"
-        elif low_years > 2:
-            return "Does not include infants"
-
-    onset = age_map.get(condition.lower(), "").lower() if condition else ""
-    if onset:
-        if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
+    # Ignore upper limit if lower bound is 0-2 years (e.g. "1 year to 50 years")
+    match = re.search(r"(from|starting at|age)\s*(\d+)\s*(month|months|year|years)", text_lower)
+    if match:
+        value = int(match.group(2))
+        unit = match.group(3)
+        if (unit.startswith("month") and value <= 24) or (unit.startswith("year") and value <= 2):
             return "Likely to include infants"
-        if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
-            return "Unlikely to include infants but possible"
-        if any(x in onset for x in ["adolescent", "adult", "teen"]):
-            return "Does not include infants"
 
+    # Check age of onset from mapping
+    onset = age_map.get(condition.lower(), "").lower()
+    if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
+        return "Likely to include infants"
+    if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
+        return "Unlikely to include infants but possible"
+    if "does not include infants" in text_lower:
+        return "Does not include infants"
     return "Uncertain"
 
 # -------------------------------
-# 3. ClinicalTrials.gov API with contacts and locations
+# 3. ClinicalTrials.gov API
 # -------------------------------
 def check_clinicaltrials_gov(condition):
     try:
@@ -118,47 +101,15 @@ def check_clinicaltrials_gov(condition):
             status = s.get("OverallStatus", ["N/A"])[0]
             ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
 
-            detail_url = "https://clinicaltrials.gov/api/query/full_studies"
-            detail_params = {"expr": nct_id, "fmt": "json"}
-            detail_r = requests.get(detail_url, params=detail_params, timeout=10)
-            detail_data = detail_r.json()
-
-            contacts = []
-            locations = []
-
-            try:
-                full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
-                protocol_section = full_study.get('ProtocolSection', {})
-                contacts_module = protocol_section.get('ContactsLocationsModule', {})
-
-                overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
-                for contact in overall_officials:
-                    name = contact.get('LastName', 'N/A')
-                    role = contact.get('Role', 'N/A')
-                    contacts.append(f"{name} ({role})")
-
-                location_list = contacts_module.get('LocationList', {}).get('Location', [])
-                for loc in location_list:
-                    facility = loc.get('LocationFacility', 'N/A')
-                    city = loc.get('LocationCity', 'N/A')
-                    country = loc.get('LocationCountry', 'N/A')
-                    locations.append(f"{facility}, {city}, {country}")
-
-            except Exception as e:
-                print(f"⚠️ Detail parsing error for {nct_id}: {e}")
-                contacts = ["No contact data found."]
-                locations = ["No location data found."]
-
             study_info.append({
                 "nct_id": nct_id,
                 "title": title,
                 "phase": phase,
                 "status": status,
                 "link": ct_link,
-                "contacts": contacts,
-                "locations": locations
+                "contacts": [],
+                "locations": []
             })
-
         return study_info
 
     except Exception as e:
@@ -166,59 +117,54 @@ def check_clinicaltrials_gov(condition):
         return []
 
 # -------------------------------
-# 4. CGT relevance logic including approved CGT links
+# 4. CGT relevance logic
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
     condition_lower = condition.lower()
 
-    relevance = cgt_map.get(condition_lower, None)
-    found_study = False
-
-    studies = check_clinicaltrials_gov(condition)
-    if studies:
-        found_study = True
-        links.extend(studies)
-
-    # Add approved CGT info for condition
-    approved_items = approved_cgt_map.get(condition_lower, [])
-    for item in approved_items:
-        approved_link = f"https://www.fda.gov/vaccines-blood-biologics/cellular-gene-therapy-products/{item['approved_product'].lower().replace(' ', '-')}"
-        links.append({
-            "title": f"Approved CGT: {item['approved_product']} ({item['agency']} {item['approval_year']})",
-            "link": approved_link,
-            "phase": "Approved",
-            "status": "Approved",
-            "contacts": [],
-            "locations": []
-        })
-
-    cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
-                    "gene editing", "gene correction", "gene silencing", "reprogramming",
-                    "cgt", "c&gt", "car-t therapy"]
-    text_lower = text.lower() if pd.notna(text) else ""
-
-    if relevance in ["Relevant", "Likely Relevant"] and found_study:
-        pass
-    elif any(k in text_lower for k in cgt_keywords):
-        relevance = "Likely Relevant"
+    # FDA/EMA approved CGT check
+    approved_products = [p for p in approved_cgt_map if p["condition"].lower() == condition_lower]
+    if approved_products:
+        relevance = "Relevant"
+        for p in approved_products:
+            links.append({
+                "title": f"{p['approved_product']} Approved by {p['agency']} ({p['approval_year']})",
+                "link": f"https://www.google.com/search?q={p['approved_product']}+{p['agency']}+approval",
+                "phase": "Approved",
+                "status": "Approved",
+                "contacts": [],
+                "locations": []
+            })
     else:
-        relevance = "Unsure"
+        # Check ClinicalTrials.gov
+        studies = check_clinicaltrials_gov(condition)
+        if studies:
+            relevance = "Relevant"
+            links.extend(studies)
+        else:
+            # Check preclinical research
+            relevance = cgt_map.get(condition_lower, "Unsure")
+            if relevance == "Likely Relevant":
+                links.append({
+                    "title": "Preclinical research identified",
+                    "link": f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy",
+                    "phase": "Preclinical",
+                    "status": "N/A",
+                    "contacts": [],
+                    "locations": []
+                })
 
-    google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
-    links.append({
-        "title": "Google Search: Is there a gene therapy for this condition?",
-        "link": google_query,
-        "phase": "N/A",
-        "status": "N/A",
-        "contacts": [],
-        "locations": []
-    })
+    if relevance == "Unsure":
+        cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn", "gene editing", "gene correction", "gene silencing", "reprogramming"]
+        text_lower = text.lower() if pd.notna(text) else ""
+        if any(k in text_lower for k in cgt_keywords):
+            relevance = "Likely Relevant"
 
-    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
+    # Add general PubMed search
     links.append({
         "title": "PubMed Search",
-        "link": pubmed_url,
+        "link": f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy",
         "phase": "N/A",
         "status": "N/A",
         "contacts": [],
@@ -228,7 +174,7 @@ def assess_cgt_relevance_and_links(text, condition):
     return relevance, links
 
 # -------------------------------
-# 5. Contact email scraper
+# 5. Email extractor
 # -------------------------------
 def extract_email(url):
     try:
