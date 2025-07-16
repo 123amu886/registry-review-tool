@@ -35,46 +35,67 @@ approved_cgt_map = load_approved_cgt()
 # -------------------------------
 def assess_infant_inclusion(text, condition):
     text_lower = text.lower() if pd.notna(text) else ""
-
+    
+    # 1. Check direct inclusion mentions of 0-24 months or 0-2 years
     include_patterns = [
-        r"(from|starting at|age)\s*0",
-        r"(from|starting at)\s*birth",
-        r"newborn",
-        r"infants?",
-        r"less than\s*(12|18|24)\s*months",
-        r"<\s*(12|18|24)\s*months",
-        r"<\s*(1|2)\s*years?",
-        r"up to\s*18\s*months",
-        r"up to\s*2\s*years",
-        r"0[-\s]*2\s*years",
-        r"0[-\s]*24\s*months",
-        r"0\s*(to|-)\s*\d+\s*(years?|months?)",
-        r"(from|starting at)\s*1\s*(year|yr|years?)",
-        r"age\s*1\s*(year|yr|years?)"
+        r"(from|starting at|age)\s*(0|birth|newborn|newborns|infant|infants)",
+        r"(from|starting at|age)\s*0\s*(to|-)\s*(\d+)\s*(months?|years?)",
+        r"0\s*(to|-)\s*(\d+)\s*(months?|years?)",
+        r"(less than|<)\s*(12|18|24|1|2)\s*(months?|years?)",
+        r"up to\s*(12|18|24|1|2)\s*(months?|years?)",
+        r"\bnewborns?\b",
+        r"\binfants?\b"
     ]
 
-    # Direct "Include infants" if explicit mention
     for pattern in include_patterns:
         if re.search(pattern, text_lower):
             return "Include infants"
-
-    # Ignore upper limit if lower bound is 0-2 years (e.g. "1 year to 50 years")
-    match = re.search(r"(from|starting at|age)\s*(\d+)\s*(month|months|year|years)", text_lower)
-    if match:
-        value = int(match.group(2))
-        unit = match.group(3)
-        if (unit.startswith("month") and value <= 24) or (unit.startswith("year") and value <= 2):
-            return "Likely to include infants"
-
-    # Check age of onset from mapping
+    
+    # 2. Check for numeric age ranges: extract all age ranges from text and analyze lower bound
+    # Examples: "1 year to 15 years", "6 months - 45 years"
+    age_range_matches = re.findall(
+        r"(\d+)\s*(months?|years?)\s*(to|-)\s*(\d+)\s*(months?|years?)", text_lower
+    )
+    for lower_val, lower_unit, _, upper_val, upper_unit in age_range_matches:
+        lower_val = int(lower_val)
+        upper_val = int(upper_val)
+        # Convert months to years for comparison
+        if "month" in lower_unit:
+            lower_val_in_years = lower_val / 12
+        else:
+            lower_val_in_years = lower_val
+        
+        if "month" in upper_unit:
+            upper_val_in_years = upper_val / 12
+        else:
+            upper_val_in_years = upper_val
+        
+        # Lower bound between 0 and 2 years => Include or Likely
+        if 0 <= lower_val_in_years <= 2:
+            # If upper bound also ≤ 2 years or unspecified, "Include infants"
+            if upper_val_in_years <= 2:
+                return "Include infants"
+            else:
+                # Upper bound > 2 years but lower bound ≤ 2 => Likely to include infants
+                return "Likely to include infants"
+        # If lower bound ≥ 2 years, "Does not include infants"
+        elif lower_val_in_years >= 2:
+            return "Does not include infants"
+    
+    # 3. Check explicit exclusion keywords
+    if re.search(r"(does not include infants|exclude infants|no infants|not include infants)", text_lower):
+        return "Does not include infants"
+    
+    # 4. Check Age of onset mapping
     onset = age_map.get(condition.lower(), "").lower()
     if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
         return "Likely to include infants"
     if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
         return "Unlikely to include infants but possible"
-    if "does not include infants" in text_lower:
-        return "Does not include infants"
+    
+    # 5. If no clues, return uncertain
     return "Uncertain"
+
 
 # -------------------------------
 # 3. ClinicalTrials.gov API
