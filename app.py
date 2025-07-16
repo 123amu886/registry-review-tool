@@ -1,294 +1,108 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-import re
 import json
+from io import BytesIO
 
-st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
-st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
+st.set_page_config(page_title="CGT Landscape Mapping Tool", layout="wide")
+st.title("🧬 Full CGT Landscape Mapping Tool")
 
-# -------------------------------
-# 1. Load JSON mapping files
-# -------------------------------
-@st.cache_data
-def load_cgt_mapping():
-    with open("merged_cgt_mapping.json", "r") as f:
-        return json.load(f)
+# Load Excel and JSON files uploaded by user
+uploaded_excel = st.file_uploader("Upload Excel file with CGT mapping data", type=["xlsx"])
+uploaded_json = st.file_uploader("Upload merged_cgt_mapping.json", type=["json"])
 
-@st.cache_data
-def load_age_mapping():
-    with open("infant_mapping.json", "r") as f:
-        return json.load(f)
+# Session state to keep comments and data updates persistent
+if "reviewer_comments" not in st.session_state:
+    st.session_state["reviewer_comments"] = {}
 
-cgt_map = load_cgt_mapping()
-age_map = load_age_mapping()
+if uploaded_excel and uploaded_json:
+    # Load Excel data
+    df = pd.read_excel(uploaded_excel)
 
-# -------------------------------
-# 2. Infant inclusion patterns
-# -------------------------------
-include_patterns = [
-    r"(from|starting at|age)\s*0",
-    r"(from|starting at)\s*birth",
-    r"newborn",
-    r"infants?",
-    r"less than\s*(12|18|24)\s*months",
-    r"<\s*(12|18|24)\s*months",
-    r"<\s*(1|2)\s*years?",
-    r"up to\s*18\s*months",
-    r"up to\s*2\s*years",
-    r"0[-\s]*2\s*years",
-    r"0[-\s]*24\s*months",
-    r"from\s*1\s*year",
-    r"from\s*12\s*months",
-    r">\s*12\s*months",
-    r">\s*18\s*months",
-    r">\s*1\s*year"
-]
+    # Load JSON mapping
+    mapping_json = json.load(uploaded_json)
 
-# -------------------------------
-# 3. Infant inclusion logic
-# -------------------------------
-def assess_infant_inclusion(text, condition):
-    text_lower = text.lower() if pd.notna(text) else ""
-    for pattern in include_patterns:
-        if re.search(pattern, text_lower):
-            return "Include infants"
+    # Ensure key columns present
+    required_cols = ["Condition", "Subset", "Infant Inclusion", "CGT Relevance", "ClinicalTrials.gov Link"]
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"Excel missing one or more required columns: {required_cols}")
+        st.stop()
 
-    onset = age_map.get(condition.lower(), "").lower()
-    if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
-        return "Likely to include infants"
-    if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
-        return "Unlikely to include infants but possible"
-    return "Uncertain"
+    # Filter subsets checkbox
+    st.sidebar.header("Filter Subsets")
+    subsets = df["Subset"].unique().tolist()
+    selected_subsets = st.sidebar.multiselect("Select subsets to display", options=subsets, default=subsets)
 
-# -------------------------------
-# 4. ClinicalTrials.gov API with contacts and locations
-# -------------------------------
-def check_clinicaltrials_gov(condition):
-    try:
-        search_url = "https://clinicaltrials.gov/api/query/study_fields"
-        search_params = {
-            "expr": f"{condition} gene therapy",
-            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
-            "min_rnk": 1,
-            "max_rnk": 3,
-            "fmt": "json"
-        }
-        search_r = requests.get(search_url, params=search_params, timeout=10)
-        search_data = search_r.json()
-        studies = search_data['StudyFieldsResponse']['StudyFields']
-        study_info = []
+    filtered_df = df[df["Subset"].isin(selected_subsets)].reset_index(drop=True)
 
-        for s in studies:
-            nct_id = s["NCTId"][0]
-            title = s["BriefTitle"][0]
-            phase = s.get("Phase", ["N/A"])[0]
-            status = s.get("OverallStatus", ["N/A"])[0]
-            ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
+    # Add Reviewer Comments column from session_state if exists
+    def get_comment(cond):
+        return st.session_state["reviewer_comments"].get(cond, "")
 
-            detail_url = "https://clinicaltrials.gov/api/query/full_studies"
-            detail_params = {"expr": nct_id, "fmt": "json"}
-            detail_r = requests.get(detail_url, params=detail_params, timeout=10)
-            detail_data = detail_r.json()
+    filtered_df["Reviewer Comments"] = filtered_df["Condition"].apply(get_comment)
 
-            contacts = []
-            locations = []
+    # Editable table for reviewer comments
+    st.write("### CGT Mapping Data Table")
+    edited_df = filtered_df.copy()
 
-            try:
-                full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
-                protocol_section = full_study.get('ProtocolSection', {})
-                contacts_module = protocol_section.get('ContactsLocationsModule', {})
+    # Editable reviewer comments with text_input for each row
+    for idx, row in edited_df.iterrows():
+        comment = st.text_input(
+            label=f"Reviewer comments for {row['Condition']}",
+            value=row["Reviewer Comments"],
+            key=f"comment_{idx}"
+        )
+        # Update session state on change
+        st.session_state["reviewer_comments"][row["Condition"]] = comment
 
-                overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
-                for contact in overall_officials:
-                    name = contact.get('LastName', 'N/A')
-                    role = contact.get('Role', 'N/A')
-                    contacts.append(f"{name} ({role})")
+    # Show dataframe again with updated comments
+    edited_df["Reviewer Comments"] = edited_df["Condition"].map(st.session_state["reviewer_comments"])
 
-                location_list = contacts_module.get('LocationList', {}).get('Location', [])
-                for loc in location_list:
-                    facility = loc.get('LocationFacility', 'N/A')
-                    city = loc.get('LocationCity', 'N/A')
-                    country = loc.get('LocationCountry', 'N/A')
-                    locations.append(f"{facility}, {city}, {country}")
+    # Display final table with clickable ClinicalTrials.gov links
+    def make_clickable(url):
+        return f'<a href="{url}" target="_blank">Link</a>' if pd.notna(url) and url != "" else ""
 
-            except Exception as e:
-                print(f"⚠️ Detail parsing error for {nct_id}: {e}")
-                contacts = ["No contact data found."]
-                locations = ["No location data found."]
+    st.markdown(
+        edited_df[["Condition", "Subset", "Infant Inclusion", "CGT Relevance"]].to_html(escape=False),
+        unsafe_allow_html=True,
+    )
 
-            study_info.append({
-                "nct_id": nct_id,
-                "title": title,
-                "phase": phase,
-                "status": status,
-                "link": ct_link,
-                "contacts": contacts,
-                "locations": locations
-            })
+    # Download updated Excel with reviewer comments included
+    def to_excel(df_to_save):
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_to_save.to_excel(writer, index=False, sheet_name='CGT Mapping')
+            writer.save()
+        processed_data = output.getvalue()
+        return processed_data
 
-        return study_info
+    st.markdown("---")
+    if st.button("Download updated Excel"):
+        # Merge comments back into full df for download
+        df_with_comments = df.copy()
+        df_with_comments["Reviewer Comments"] = df_with_comments["Condition"].map(st.session_state["reviewer_comments"])
+        excel_data = to_excel(df_with_comments)
+        st.download_button(
+            label="Download Excel",
+            data=excel_data,
+            file_name="updated_cgt_mapping.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-    except Exception as e:
-        print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
-        return []
+    # Download updated JSON (can save reviewer comments as well)
+    st.markdown("---")
+    if st.button("Download updated JSON"):
+        # Add comments to JSON structure
+        for cond in mapping_json:
+            comment = st.session_state["reviewer_comments"].get(cond, "")
+            mapping_json[cond]["reviewer_comment"] = comment
+        json_str = json.dumps(mapping_json, indent=2)
+        st.download_button(
+            label="Download JSON",
+            data=json_str,
+            file_name="updated_merged_cgt_mapping.json",
+            mime="application/json"
+        )
 
-# -------------------------------
-# 5. CGT relevance logic
-# -------------------------------
-def assess_cgt_relevance_and_links(text, condition):
-    links = []
-    condition_lower = condition.lower()
+else:
+    st.info("Please upload both Excel and JSON files to begin.")
 
-    relevance = cgt_map.get(condition_lower, None)
-    found_study = False
-
-    studies = check_clinicaltrials_gov(condition)
-    if studies:
-        found_study = True
-        links.extend(studies)
-
-    cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
-                    "gene editing", "gene correction", "gene silencing", "reprogramming",
-                    "cgt", "c&gt", "car-t therapy"]
-    text_lower = text.lower() if pd.notna(text) else ""
-
-    if relevance in ["Relevant", "Likely Relevant"] and found_study:
-        pass
-    elif any(k in text_lower for k in cgt_keywords):
-        relevance = "Likely Relevant"
-    else:
-        relevance = "Unsure"
-
-    google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
-    links.append({
-        "title": "Google Search: Is there a gene therapy for this condition?",
-        "link": google_query,
-        "phase": "N/A",
-        "status": "N/A",
-        "contacts": [],
-        "locations": []
-    })
-
-    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/?term={condition.replace(' ','+')}+gene+therapy"
-    links.append({
-        "title": "PubMed Search",
-        "link": pubmed_url,
-        "phase": "N/A",
-        "status": "N/A",
-        "contacts": [],
-        "locations": []
-    })
-
-    return relevance, links
-
-# -------------------------------
-# 6. Contact email scraper
-# -------------------------------
-def extract_email(url):
-    try:
-        r = requests.get(url, timeout=8)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        mail = soup.select_one("a[href^=mailto]")
-        if mail:
-            return mail['href'].replace('mailto:', '')
-        matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
-        return matches[0] if matches else ""
-    except Exception as e:
-        print(f"⚠️ Email extraction error: {e}")
-        return ""
-
-# -------------------------------
-# 7. Streamlit app flow
-# -------------------------------
-uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
-
-if uploaded_file:
-    if "df" not in st.session_state:
-        df = pd.read_excel(uploaded_file, engine="openpyxl")
-        st.session_state.df = df.copy()
-    else:
-        df = st.session_state.df
-
-    reviewer_name = st.text_input("Your name (Column F)", "")
-    df_filtered = df[df["Reviewer"].str.strip().str.lower() == reviewer_name.strip().lower()].copy()
-
-    show_incomplete = st.checkbox("Show only incomplete rows", value=True)
-    if show_incomplete:
-        df_filtered = df_filtered[df_filtered["Population (use drop down list)"].isna() | df_filtered["Relevance to C&GT"].isna()]
-
-    if df_filtered.empty:
-        st.success("🎉 All done, no incomplete rows.")
-    else:
-        record_index = st.number_input("Select row", 0, len(df_filtered)-1, step=1)
-        record = df_filtered.iloc[record_index]
-        condition = record["Conditions"]
-
-        st.subheader("🔎 Record Details")
-        st.markdown(f"**Condition:** {condition}")
-        st.markdown(f"**Study Title:** {record['Study Title']}")
-        st.markdown(f"[🔗 Open Registry Link]({record['Web site']})")
-
-        study_texts = " ".join([
-            str(record.get("Population (use drop down list)", "")),
-            str(record.get("Conditions", "")),
-            str(record.get("Study Title", "")),
-            str(record.get("Brief Summary", ""))
-        ])
-
-        suggested_infant = assess_infant_inclusion(study_texts, condition)
-        st.caption(f"🧒 Suggested: **{suggested_infant}**")
-
-        suggested_cgt, study_links = assess_cgt_relevance_and_links(study_texts, condition)
-        st.caption(f"🧬 Suggested: **{suggested_cgt}**")
-
-        if study_links:
-            st.markdown("🔗 **Related Studies & Database Links:**")
-            for s in study_links:
-                st.markdown(f"- **{s['title']}** (Phase: {s['phase']}, Status: {s['status']}) [View Study]({s['link']})")
-                if s['contacts']:
-                    st.markdown(f"  **Contacts:** {', '.join(s['contacts'])}")
-                if s['locations']:
-                    st.markdown(f"  **Locations:** {', '.join(s['locations'])}")
-
-        email = st.text_input("Contact email", extract_email(record["Web site"]))
-
-        pop_choice = st.radio("Infant Population", [
-            "Include infants",
-            "Likely to include infants",
-            "Unlikely to include infants but possible",
-            "Does not include infants",
-            "Uncertain"
-        ], index=0)
-
-        cg_choice = st.radio("Cell/Gene Therapy Relevance", [
-            "Relevant",
-            "Likely Relevant",
-            "Unlikely Relevant",
-            "Not Relevant",
-            "Unsure"
-        ], index=0)
-
-        comments = st.text_area("Reviewer Comments", value=record.get(
-            "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)", ""))
-
-        if st.button("💾 Save"):
-            original_index = df_filtered.index[record_index]
-            df.at[original_index, "contact information"] = email
-            df.at[original_index, "Population (use drop down list)"] = pop_choice if pop_choice != "Uncertain" else suggested_infant
-            df.at[original_index, "Relevance to C&GT"] = cg_choice if cg_choice != "Unsure" else suggested_cgt
-            df.at[original_index, "Reviewer Notes (comments to support the relevance to the infant population that needs C&GT)"] = comments
-            st.session_state.df = df.copy()
-            st.success("✅ Record saved successfully!")
-
-        if st.button("⬇️ Export Updated Excel"):
-            output_filename = "updated_registry_review.xlsx"
-            df.to_excel(output_filename, index=False)
-            with open(output_filename, "rb") as f:
-                st.download_button(
-                    label="⬇️ Download Updated Registry",
-                    data=f,
-                    file_name=output_filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
