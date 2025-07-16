@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 import json
 
-st.set_page_config(page_title="🧾 Clinical Registry Review Tool (Final Integrated)", layout="wide")
+st.set_page_config(page_title="Clinical Registry Review Tool", layout="wide")
 st.title("🧾 Clinical Registry Review Tool (Final Integrated)")
 
 # -------------------------------
@@ -21,60 +21,177 @@ def load_age_mapping():
     with open("infant_mapping.json", "r") as f:
         return json.load(f)
 
-# FIXED: Load approved_cgt.json which is a list, convert to dict keyed by lowercase condition
 @st.cache_data
 def load_approved_cgt():
     with open("approved_cgt.json", "r") as f:
-        data = json.load(f)  # list of dicts
-    approved_dict = {}
-    for entry in data:
-        key = entry.get("condition", "").strip().lower()
-        if key:
-            approved_dict.setdefault(key, []).append(entry)
-    return approved_dict
+        return json.load(f)
 
 cgt_map = load_cgt_mapping()
 age_map = load_age_mapping()
-approved_cgt_map = load_approved_cgt()
+approved_cgt_list = load_approved_cgt()
+
+# Transform approved_cgt_list to dict by condition (lowercase)
+approved_cgt_map = {}
+for item in approved_cgt_list:
+    cond = item["condition"].lower()
+    approved_cgt_map.setdefault(cond, []).append(item)
 
 # -------------------------------
-# 3. Infant inclusion logic (example)
-# (Your existing code here, unchanged)
+# 2. Infant inclusion logic
 # -------------------------------
+def assess_infant_inclusion(text, condition):
+    if not text:
+        return "Uncertain"
+    
+    text_lower = text.lower()
+
+    include_patterns = [
+        r"(from|starting at|age)\s*0",
+        r"(from|starting at)\s*birth",
+        r"newborn",
+        r"infants?",
+        r"less than\s*(12|18|24|36)\s*months",
+        r"<\s*(12|18|24|36)\s*months",
+        r"<\s*(1|2|3)\s*years?",
+        r"up to\s*(12|18|24|36)\s*months",
+        r"up to\s*(1|2|3)\s*years",
+        r"0[-\s]*2\s*years",
+        r"0[-\s]*24\s*months",
+        r"^0\s*-\s*\d+\s*years",
+        r"0\s*to\s*\d+\s*years"
+    ]
+
+    for pattern in include_patterns:
+        if re.search(pattern, text_lower):
+            return "Include infants"
+
+    # Extract age ranges: e.g. "0 to 17 years", "1-50 years"
+    age_ranges = re.findall(r"(\d+)\s*(?:-|to)\s*(\d+)\s*(months|years?)", text_lower)
+    for low_str, high_str, unit in age_ranges:
+        low = int(low_str)
+        high = int(high_str)
+        if 'month' in unit:
+            low_years = low / 12
+            high_years = high / 12
+        else:
+            low_years = low
+            high_years = high
+
+        if 0 <= low_years <= 2:
+            return "Include infants"
+        elif low_years > 2:
+            return "Does not include infants"
+
+    onset = age_map.get(condition.lower(), "").lower() if condition else ""
+    if onset:
+        if any(x in onset for x in ["birth", "infant", "neonate", "0-2 years", "0-12 months", "0-24 months"]):
+            return "Likely to include infants"
+        if any(x in onset for x in ["toddler", "child", "3 years", "4 years"]):
+            return "Unlikely to include infants but possible"
+        if any(x in onset for x in ["adolescent", "adult", "teen"]):
+            return "Does not include infants"
+
+    return "Uncertain"
 
 # -------------------------------
-# 5. CGT relevance logic with approved CGT lookup fix
+# 3. ClinicalTrials.gov API with contacts and locations
+# -------------------------------
+def check_clinicaltrials_gov(condition):
+    try:
+        search_url = "https://clinicaltrials.gov/api/query/study_fields"
+        search_params = {
+            "expr": f"{condition} gene therapy",
+            "fields": "NCTId,BriefTitle,Phase,OverallStatus",
+            "min_rnk": 1,
+            "max_rnk": 3,
+            "fmt": "json"
+        }
+        search_r = requests.get(search_url, params=search_params, timeout=10)
+        search_data = search_r.json()
+        studies = search_data['StudyFieldsResponse']['StudyFields']
+        study_info = []
+
+        for s in studies:
+            nct_id = s["NCTId"][0]
+            title = s["BriefTitle"][0]
+            phase = s.get("Phase", ["N/A"])[0]
+            status = s.get("OverallStatus", ["N/A"])[0]
+            ct_link = f"https://clinicaltrials.gov/ct2/show/{nct_id}"
+
+            detail_url = "https://clinicaltrials.gov/api/query/full_studies"
+            detail_params = {"expr": nct_id, "fmt": "json"}
+            detail_r = requests.get(detail_url, params=detail_params, timeout=10)
+            detail_data = detail_r.json()
+
+            contacts = []
+            locations = []
+
+            try:
+                full_study = detail_data['FullStudiesResponse']['FullStudies'][0]['Study']
+                protocol_section = full_study.get('ProtocolSection', {})
+                contacts_module = protocol_section.get('ContactsLocationsModule', {})
+
+                overall_officials = contacts_module.get('OverallOfficialList', {}).get('OverallOfficial', [])
+                for contact in overall_officials:
+                    name = contact.get('LastName', 'N/A')
+                    role = contact.get('Role', 'N/A')
+                    contacts.append(f"{name} ({role})")
+
+                location_list = contacts_module.get('LocationList', {}).get('Location', [])
+                for loc in location_list:
+                    facility = loc.get('LocationFacility', 'N/A')
+                    city = loc.get('LocationCity', 'N/A')
+                    country = loc.get('LocationCountry', 'N/A')
+                    locations.append(f"{facility}, {city}, {country}")
+
+            except Exception as e:
+                print(f"⚠️ Detail parsing error for {nct_id}: {e}")
+                contacts = ["No contact data found."]
+                locations = ["No location data found."]
+
+            study_info.append({
+                "nct_id": nct_id,
+                "title": title,
+                "phase": phase,
+                "status": status,
+                "link": ct_link,
+                "contacts": contacts,
+                "locations": locations
+            })
+
+        return study_info
+
+    except Exception as e:
+        print(f"⚠️ ClinicalTrials.gov API error for {condition}: {e}")
+        return []
+
+# -------------------------------
+# 4. CGT relevance logic including approved CGT links
 # -------------------------------
 def assess_cgt_relevance_and_links(text, condition):
     links = []
     condition_lower = condition.lower()
 
-    # Lookup approved CGT products for this condition
-    approved_info = approved_cgt_map.get(condition_lower, [])
-    
-    if approved_info:
-        # Add approved products as links/info
-        for prod in approved_info:
-            title = f"Approved Product: {prod['approved_product']} ({prod['agency']}, {prod['approval_year']})"
-            # Example: you can link to FDA or EMA sites if you have URLs, else leave link empty or generic
-            link = f"https://www.fda.gov/vaccines-blood-biologics/cellular-gene-therapy-products/{prod['approved_product'].replace(' ','-')}"
-            links.append({
-                "title": title,
-                "link": link,
-                "phase": "Approved",
-                "status": "Approved",
-                "contacts": [],
-                "locations": []
-            })
-
     relevance = cgt_map.get(condition_lower, None)
     found_study = False
 
-    # Existing check for clinicaltrials.gov studies
     studies = check_clinicaltrials_gov(condition)
     if studies:
         found_study = True
         links.extend(studies)
+
+    # Add approved CGT info for condition
+    approved_items = approved_cgt_map.get(condition_lower, [])
+    for item in approved_items:
+        approved_link = f"https://www.fda.gov/vaccines-blood-biologics/cellular-gene-therapy-products/{item['approved_product'].lower().replace(' ', '-')}"
+        links.append({
+            "title": f"Approved CGT: {item['approved_product']} ({item['agency']} {item['approval_year']})",
+            "link": approved_link,
+            "phase": "Approved",
+            "status": "Approved",
+            "contacts": [],
+            "locations": []
+        })
 
     cgt_keywords = ["cell therapy", "gene therapy", "crispr", "talen", "zfn",
                     "gene editing", "gene correction", "gene silencing", "reprogramming",
@@ -88,7 +205,6 @@ def assess_cgt_relevance_and_links(text, condition):
     else:
         relevance = "Unsure"
 
-    # Google & PubMed search links for more info
     google_query = f"https://www.google.com/search?q=is+there+a+gene+therapy+for+{condition.replace(' ','+')}"
     links.append({
         "title": "Google Search: Is there a gene therapy for this condition?",
@@ -112,18 +228,24 @@ def assess_cgt_relevance_and_links(text, condition):
     return relevance, links
 
 # -------------------------------
-# 6. Your existing ClinicalTrials.gov API, email extraction, infant inclusion logic, etc.
+# 5. Contact email scraper
 # -------------------------------
+def extract_email(url):
+    try:
+        r = requests.get(url, timeout=8)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        mail = soup.select_one("a[href^=mailto]")
+        if mail:
+            return mail['href'].replace('mailto:', '')
+        matches = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}", soup.get_text())
+        return matches[0] if matches else ""
+    except Exception as e:
+        print(f"⚠️ Email extraction error: {e}")
+        return ""
 
 # -------------------------------
-# 7. Streamlit UI code: file uploader, reviewer inputs, displaying suggested infant inclusion,
-# CGT relevance, study links, save and export buttons, etc.
+# 6. Streamlit app flow
 # -------------------------------
-
-# (Keep your existing full app code here, unchanged except for imports and the new approved_cgt_map loading.)
-
-# Example usage in your main flow (inside your Streamlit app logic):
-
 uploaded_file = st.file_uploader("📂 Upload registry Excel", type=["xlsx"])
 
 if uploaded_file:
